@@ -1,0 +1,11 @@
+{
+  "name": "ignacio-server",
+  "version": "1.0.0",
+  "description": "This API is designed to match the React/Axios service layer exactly.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC"
+}
