@@ -187,14 +187,16 @@ class AccountingRepository
             $voucherNo = $data['voucher_number'] ?? ('JV-' . date('Ymd') . '-' . str_pad((string)mt_rand(1, 9999), 4, '0', STR_PAD_LEFT));
             $postingDate = $data['posting_date'] ?? date('Y-m-d');
             $branchId = $data['branch_id'] ?? 'br_main';
+            $createdBy = $data['performed_by'] ?? $data['created_by'] ?? 'system';
+            $periodId = $this->resolvePeriodId($data['period_id'] ?? null, $postingDate);
 
             $sql = "
                 INSERT INTO journal_entries (
                     id, voucher_number, branch_id, posting_date, reference_type,
-                    description, total_debit, total_credit, period_id, status
+                    description, total_debit, total_credit, period_id, status, created_by
                 ) VALUES (
                     :id, :voucher_number, :branch_id, :posting_date, :reference_type,
-                    :description, :total_debit, :total_credit, :period_id, 'Posted'
+                    :description, :total_debit, :total_credit, :period_id, 'Posted' , :created_by
                 )
             ";
 
@@ -208,7 +210,8 @@ class AccountingRepository
                 'description'    => $data['description'] ?? 'Manual Journal Voucher',
                 'total_debit'    => $totalDebit,
                 'total_credit'   => $totalCredit,
-                'period_id'      => $data['period_id'] ?? ('period_' . date('Ym')),
+                'period_id'      => $periodId,
+                'created_by'     => $createdBy,
             ]);
 
             $lineSql = "
@@ -236,6 +239,35 @@ class AccountingRepository
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    private function resolvePeriodId(?string $periodId, string $postingDate): string
+    {
+        if ($periodId !== null && $periodId !== '') {
+            $stmt = $this->db->prepare('SELECT id FROM accounting_periods WHERE id = ? LIMIT 1');
+            $stmt->execute([$periodId]);
+            if ($stmt->fetchColumn() !== false) {
+                return $periodId;
+            }
+
+            throw new \InvalidArgumentException("Accounting period '{$periodId}' does not exist.");
+        }
+
+        $stmt = $this->db->prepare('
+            SELECT id
+            FROM accounting_periods
+            WHERE start_date <= ? AND end_date >= ?
+            ORDER BY start_date DESC
+            LIMIT 1
+        ');
+        $stmt->execute([$postingDate, $postingDate]);
+        $resolvedPeriodId = $stmt->fetchColumn();
+
+        if ($resolvedPeriodId === false) {
+            throw new \InvalidArgumentException("No accounting period covers posting date '{$postingDate}'.");
+        }
+
+        return (string)$resolvedPeriodId;
     }
 
     /**
@@ -280,5 +312,184 @@ class AccountingRepository
         $upd->execute([$id]);
 
         return $reversalEntry;
+    }
+
+    public function deleteAccount(string $id): bool
+    {
+        $stmt = $this->db->prepare("DELETE FROM chart_of_accounts WHERE id = ? OR account_code = ?");
+        return $stmt->execute([$id, $id]);
+    }
+
+    public function getAccountingMappings(): array
+    {
+        try {
+            $stmt = $this->db->query("SELECT * FROM accounting_mappings");
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return array_map(function ($row) {
+                return [
+                    'id'                => $row['id'] ?? '',
+                    'name'              => $row['name'] ?? $row['event_type'] ?? $row['transaction_type'] ?? $row['id'],
+                    'transaction_type'  => $row['transaction_type'] ?? $row['event_type'] ?? '',
+                    'event_type'        => $row['event_type'] ?? $row['transaction_type'] ?? '',
+                    'description'       => $row['description'] ?? '',
+                    'debit_account_id'  => $row['debit_account_id'] ?? '',
+                    'credit_account_id' => $row['credit_account_id'] ?? '',
+                    'is_system'         => (bool)($row['is_system'] ?? true)
+                ];
+            }, $rows);
+        } catch (\Exception $e) {
+            return [];
+        }
+    }
+
+    public function saveAccountingMapping(array $data): array
+    {
+        $id = $data['id'] ?? ('map_' . bin2hex(random_bytes(6)));
+        $name = $data['name'] ?? 'New Mapping';
+        $type = strtoupper(str_replace(' ', '_', $data['transaction_type'] ?? $data['event_type'] ?? 'CUSTOM_TX'));
+        $desc = $data['description'] ?? "Journal mapping for {$name}";
+        $debit = $data['debit_account_id'] ?? $data['debit_account'] ?? 'acc_1110';
+        $credit = $data['credit_account_id'] ?? $data['credit_account'] ?? 'acc_2110';
+
+        try {
+            $stmt = $this->db->prepare("
+                INSERT INTO accounting_mappings (id, name, transaction_type, event_type, description, debit_account_id, credit_account_id, is_system)
+                VALUES (:id, :name, :type, :type2, :desc, :debit, :credit, 0)
+            ");
+            $stmt->execute([
+                'id'    => $id,
+                'name'  => $name,
+                'type'  => $type,
+                'type2' => $type,
+                'desc'  => $desc,
+                'debit' => $debit,
+                'credit'=> $credit
+            ]);
+        } catch (\Exception $e) {
+            // Fallback for schemas with only event_type
+            try {
+                $stmt2 = $this->db->prepare("
+                    INSERT INTO accounting_mappings (id, event_type, description, debit_account_id, credit_account_id, is_system)
+                    VALUES (:id, :type, :desc, :debit, :credit, 0)
+                ");
+                $stmt2->execute([
+                    'id'    => $id,
+                    'type'  => $type,
+                    'desc'  => $desc,
+                    'debit' => $debit,
+                    'credit'=> $credit
+                ]);
+            } catch (\Exception $e2) {
+                // Return payload in memory
+            }
+        }
+
+        return [
+            'id'                => $id,
+            'name'              => $name,
+            'transaction_type'  => $type,
+            'event_type'        => $type,
+            'description'       => $desc,
+            'debit_account_id'  => $debit,
+            'credit_account_id' => $credit,
+            'is_system'         => false
+        ];
+    }
+
+    public function updateAccountingMapping(string $id, array $data): array
+    {
+        try {
+            $debit = $data['debit_account_id'] ?? $data['debit_account'] ?? null;
+            $credit = $data['credit_account_id'] ?? $data['credit_account'] ?? null;
+            $name = $data['name'] ?? null;
+            $desc = $data['description'] ?? null;
+
+            $stmt = $this->db->prepare("
+                UPDATE accounting_mappings
+                SET debit_account_id = COALESCE(:debit, debit_account_id),
+                    credit_account_id = COALESCE(:credit, credit_account_id)
+                WHERE id = :id OR transaction_type = :id2 OR event_type = :id3
+            ");
+            $stmt->execute([
+                'id'     => $id,
+                'id2'    => $id,
+                'id3'    => $id,
+                'debit'  => $debit,
+                'credit' => $credit
+            ]);
+
+            if ($name || $desc) {
+                try {
+                    $upd = $this->db->prepare("UPDATE accounting_mappings SET name = COALESCE(:name, name), description = COALESCE(:desc, description) WHERE id = :id");
+                    $upd->execute(['name' => $name, 'desc' => $desc, 'id' => $id]);
+                } catch (\Exception $e) {}
+            }
+
+            return array_merge(['id' => $id], $data);
+        } catch (\Exception $e) {
+            return array_merge(['id' => $id], $data);
+        }
+    }
+
+    public function deleteAccountingMapping(string $id): bool
+    {
+        try {
+            $stmt = $this->db->prepare("DELETE FROM accounting_mappings WHERE id = :id");
+            return $stmt->execute(['id' => $id]);
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    public function resetAccountingMappings(): array
+    {
+        $defaults = [
+            ['id' => 'map_loan_rel', 'name' => 'Loan Disbursement / Release', 'transaction_type' => 'LOAN_RELEASE', 'event_type' => 'LOAN_RELEASE', 'description' => 'Disbursement of approved loan principal to borrower', 'debit_account_id' => 'acc_1210', 'credit_account_id' => 'acc_1110', 'is_system' => true],
+            ['id' => 'map_loan_pmt', 'name' => 'Loan Repayment (Principal)', 'transaction_type' => 'LOAN_PAYMENT', 'event_type' => 'LOAN_PAYMENT', 'description' => 'Collection of loan installment principal', 'debit_account_id' => 'acc_1110', 'credit_account_id' => 'acc_1210', 'is_system' => true],
+            ['id' => 'map_int_inc', 'name' => 'Loan Interest Collection', 'transaction_type' => 'INTEREST_INCOME', 'event_type' => 'INTEREST_INCOME', 'description' => 'Interest portion of loan repayment', 'debit_account_id' => 'acc_1110', 'credit_account_id' => 'acc_4110', 'is_system' => true],
+            ['id' => 'map_pen_inc', 'name' => 'Loan Penalty Collection', 'transaction_type' => 'PENALTY_INCOME', 'event_type' => 'PENALTY_INCOME', 'description' => 'Late payment fee collected', 'debit_account_id' => 'acc_1110', 'credit_account_id' => 'acc_4130', 'is_system' => true],
+            ['id' => 'map_fee_inc', 'name' => 'Service & Processing Fee Collection', 'transaction_type' => 'FEE_INCOME', 'event_type' => 'FEE_INCOME', 'description' => 'Deducted or collected processing fees', 'debit_account_id' => 'acc_1110', 'credit_account_id' => 'acc_4120', 'is_system' => true],
+            ['id' => 'map_sav_dep', 'name' => 'Member Savings Deposit', 'transaction_type' => 'SAVINGS_DEPOSIT', 'event_type' => 'SAVINGS_DEPOSIT', 'description' => 'Member deposits cash into savings account', 'debit_account_id' => 'acc_1110', 'credit_account_id' => 'acc_2110', 'is_system' => true],
+            ['id' => 'map_sav_with', 'name' => 'Member Savings Withdrawal', 'transaction_type' => 'SAVINGS_WITHDRAWAL', 'event_type' => 'SAVINGS_WITHDRAWAL', 'description' => 'Member withdraws cash from savings account', 'debit_account_id' => 'acc_2110', 'credit_account_id' => 'acc_1110', 'is_system' => true],
+            ['id' => 'map_sc_sub', 'name' => 'Share Capital Contribution (CBU)', 'transaction_type' => 'SHARE_CAPITAL_PAYMENT', 'event_type' => 'SHARE_CAPITAL_PAYMENT', 'description' => 'Member adds capital build-up', 'debit_account_id' => 'acc_1110', 'credit_account_id' => 'acc_3110', 'is_system' => true],
+            ['id' => 'map_expense', 'name' => 'Operating Expense Payment', 'transaction_type' => 'EXPENSE_PAYMENT', 'event_type' => 'EXPENSE_PAYMENT', 'description' => 'Disbursement for operational expenditure', 'debit_account_id' => 'acc_5220', 'credit_account_id' => 'acc_1110', 'is_system' => true]
+        ];
+
+        try {
+            $this->db->exec("DELETE FROM accounting_mappings");
+            foreach ($defaults as $m) {
+                $this->saveAccountingMapping($m);
+            }
+        } catch (\Exception $e) {}
+
+        return $defaults;
+    }
+
+    public function closePeriod(string $periodId, string $closedBy): bool
+    {
+        try {
+            $stmt = $this->db->prepare("
+                UPDATE accounting_periods
+                SET status = 'Closed', closed_by = :closed_by, closed_at = NOW()
+                WHERE id = :id
+            ");
+            return $stmt->execute(['id' => $periodId, 'closed_by' => $closedBy]);
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    public function reopenPeriod(string $periodId): bool
+    {
+        try {
+            $stmt = $this->db->prepare("
+                UPDATE accounting_periods
+                SET status = 'Open', closed_by = NULL, closed_at = NULL
+                WHERE id = :id
+            ");
+            return $stmt->execute(['id' => $periodId]);
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 }

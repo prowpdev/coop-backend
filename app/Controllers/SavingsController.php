@@ -70,6 +70,7 @@ class SavingsController extends BaseController
 
     /**
      * POST /api/savings/transactions
+     * POST /api/savings/transact
      */
     public function transaction(): never
     {
@@ -85,6 +86,11 @@ class SavingsController extends BaseController
         } catch (\Exception $e) {
             $this->error($e->getMessage(), 400);
         }
+    }
+
+    public function transact(): never
+    {
+        $this->transaction();
     }
 
     /**

@@ -13,6 +13,8 @@ use App\Controllers\ConfigController;
 use App\Controllers\CashController;
 use App\Controllers\ReportController;
 use App\Controllers\UserController;
+use App\Controllers\SystemController;
+use PSpell\Config;
 
 /** @var Router $router */
 
@@ -30,6 +32,9 @@ $router->get('/api', [HomeController::class, 'index']);
 $router->get('/test', [HomeController::class, 'test']);
 $router->get('/api/test', [HomeController::class, 'test']);
 
+// System Configuration
+$router->get('/api/system/setup/status', [SystemController::class, 'status']);
+
 // Configuration Center
 $router->get('/api/config/all', [ConfigController::class, 'all']);
 $router->get('/api/branches', [ConfigController::class, 'branches']);
@@ -43,6 +48,8 @@ $router->get('/api/config/savings-products', [ConfigController::class, 'savingsP
 $router->get('/api/feature-toggles', [ConfigController::class, 'featureToggles']);
 $router->post('/api/feature-toggles', [ConfigController::class, 'updateToggle']);
 $router->get('/api/system-settings', [ConfigController::class, 'systemSettings']);
+
+
 
 // Members Management
 $router->get('/api/members', [MemberController::class, 'index']);
@@ -77,11 +84,25 @@ $router->delete('/api/share-capital/accounts/:id', [ShareCapitalController::clas
 // Accounting & General Ledger
 $router->get('/api/accounting/chart', [AccountingController::class, 'chart']);
 $router->get('/api/config/chart-of-accounts', [AccountingController::class, 'chart']);
+$router->post('/api/config/chart-of-accounts', [AccountingController::class, 'saveAccount']);
+
+#######################################################################################################
 $router->post('/api/accounting/chart', [AccountingController::class, 'saveAccount']);
+#######################################################################################################
+
+$router->post('/api/accounting/manual-journal', [AccountingController::class, 'manualJournal']);
+
 $router->get('/api/accounting/journals', [AccountingController::class, 'journals']);
 $router->post('/api/accounting/journals', [AccountingController::class, 'storeJournal']);
 $router->get('/api/accounting/journals/:id', [AccountingController::class, 'showJournal']);
 $router->post('/api/accounting/journals/:id/reverse', [AccountingController::class, 'reverseJournal']);
+$router->get('/api/config/accounting-mappings', [AccountingController::class, 'mappings']);
+$router->post('/api/config/accounting-mappings', [AccountingController::class, 'storeMapping']);
+$router->put('/api/config/accounting-mappings/:id', [AccountingController::class, 'updateMapping']);
+$router->delete('/api/config/accounting-mappings/:id', [AccountingController::class, 'deleteMapping']);
+$router->post('/api/config/accounting-mappings/reset', [AccountingController::class, 'resetMappings']);
+$router->post('/api/config/accounting-periods/close', [AccountingController::class, 'closePeriod']);
+$router->post('/api/config/accounting-periods/reopen', [AccountingController::class, 'reopenPeriod']);
 
 // Cash Accounts
 $router->get('/api/cash-accounts', [CashController::class, 'index']);
@@ -92,3 +113,8 @@ $router->post('/api/cash-accounts/transfer', [CashController::class, 'transfer']
 $router->get('/api/reports/trial-balance', [ReportController::class, 'trialBalance']);
 $router->get('/api/reports/financial-statements', [ReportController::class, 'financialStatements']);
 $router->get('/api/dashboard/stats', [ReportController::class, 'dashboardStats']);
+
+
+// Fees
+$router->post('/api/config/fees', [ConfigController::class, 'storeFee']);
+

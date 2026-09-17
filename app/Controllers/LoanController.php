@@ -57,6 +57,92 @@ class LoanController extends BaseController
     }
 
     /**
+     * POST /api/loans/calculate-schedule
+     */
+    public function calculateSchedule(): never
+    {
+        $input = $this->getRequestBody();
+        $principal = (float)($input['principal_amount'] ?? $input['principal'] ?? 0);
+        $rate = (float)($input['annual_interest_rate'] ?? $input['interest_rate'] ?? 0);
+        $term = (int)($input['term_months'] ?? 12);
+        $method = $input['interest_calculation_method'] ?? 'Diminishing Balance';
+        $startDate = $input['disbursement_date'] ?? date('Y-m-d');
+        $frequency = $input['payment_frequency'] ?? 'Monthly';
+
+        if ($principal <= 0 || $term <= 0) {
+            $this->error('Valid principal amount and term months are required.', 422);
+        }
+
+        $schedule = \App\Services\AmortizationService::generateSchedule(
+            $principal,
+            $rate,
+            $term,
+            $method,
+            $startDate,
+            $frequency
+        );
+
+        $totalInterest = array_sum(array_column($schedule, 'interest'));
+        $totalPayment = array_sum(array_column($schedule, 'total_installment'));
+
+        $this->json([
+            'success'  => true,
+            'schedule' => $schedule,
+            'summary'  => [
+                'principal'     => $principal,
+                'total_interest'=> round($totalInterest, 2),
+                'total_payment' => round($totalPayment, 2),
+                'installments'  => count($schedule)
+            ]
+        ]);
+    }
+
+    /**
+     * POST /api/loans/originate
+     * POST /api/loans/apply
+     */
+    public function originate(): never
+    {
+        $this->store();
+    }
+
+    public function apply(): never
+    {
+        $this->store();
+    }
+
+    /**
+     * POST /api/loans/:id/repay
+     * POST /api/loans/repay
+     */
+    public function repay(?string $id = null): never
+    {
+        $input = $this->getRequestBody();
+        if ($id) {
+            $input['loan_id'] = $id;
+        }
+
+        if (empty($input['loan_id'])) {
+            $this->error('Loan ID is required for repayment.', 422);
+        }
+
+        if (empty($input['amount_paid']) && !empty($input['amount'])) {
+            $input['amount_paid'] = $input['amount'];
+        }
+
+        if (empty($input['amount_paid']) || (float)$input['amount_paid'] <= 0) {
+            $this->error('A valid positive repayment amount is required.', 422);
+        }
+
+        try {
+            $receipt = $this->loans->recordPayment($input);
+            $this->success($receipt, 'Loan payment recorded and allocated successfully.');
+        } catch (\Exception $e) {
+            $this->error('Loan payment processing failed: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
      * POST /api/loans
      */
     public function store(): never

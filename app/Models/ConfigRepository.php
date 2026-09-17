@@ -118,4 +118,219 @@ class ConfigRepository
         $stmt = $this->db->prepare("UPDATE feature_toggles SET enabled = ? WHERE feature_key = ?");
         return $stmt->execute([$enabled ? 1 : 0, $featureKey]);
     }
+
+    public function saveLoanProduct(array $data): array
+    {
+        $id = $data['id'] ?? ('lp_' . bin2hex(random_bytes(4)));
+        $sql = "
+            INSERT INTO loan_products (id, code, name, description, min_amount, max_amount, default_term_months, min_term_months, max_term_months, default_interest_rate, interest_calculation_method, status)
+            VALUES (:id, :code, :name, :description, :min_amount, :max_amount, :default_term_months, :min_term_months, :max_term_months, :default_interest_rate, :interest_calculation_method, :status)
+            ON DUPLICATE KEY UPDATE
+                name = VALUES(name),
+                description = VALUES(description),
+                min_amount = VALUES(min_amount),
+                max_amount = VALUES(max_amount),
+                default_term_months = VALUES(default_term_months),
+                min_term_months = VALUES(min_term_months),
+                max_term_months = VALUES(max_term_months),
+                default_interest_rate = VALUES(default_interest_rate),
+                interest_calculation_method = VALUES(interest_calculation_method),
+                status = VALUES(status)
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'                          => $id,
+            'code'                        => $data['code'] ?? ('LP-' . mt_rand(100, 999)),
+            'name'                        => $data['name'],
+            'description'                 => $data['description'] ?? '',
+            'min_amount'                  => (float)($data['min_amount'] ?? 5000),
+            'max_amount'                  => (float)($data['max_amount'] ?? 500000),
+            'default_term_months'         => (int)($data['default_term_months'] ?? 12),
+            'min_term_months'             => (int)($data['min_term_months'] ?? 1),
+            'max_term_months'             => (int)($data['max_term_months'] ?? 60),
+            'default_interest_rate'       => (float)($data['default_interest_rate'] ?? 6),
+            'interest_calculation_method' => $data['interest_calculation_method'] ?? 'Diminishing Balance',
+            'status'                      => $data['status'] ?? 'Active'
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
+
+    public function deleteLoanProduct(string $id): bool
+    {
+        return $this->db->prepare("DELETE FROM loan_products WHERE id = ?")->execute([$id]);
+    }
+
+    public function saveSavingsProduct(array $data): array
+    {
+        $id = $data['id'] ?? ('sp_' . bin2hex(random_bytes(4)));
+        $sql = "
+            INSERT INTO savings_products (id, code, name, description, interest_rate, min_opening_deposit, min_balance_for_interest, lock_in_period_days, status)
+            VALUES (:id, :code, :name, :description, :interest_rate, :min_opening_deposit, :min_balance_for_interest, :lock_in_period_days, :status)
+            ON DUPLICATE KEY UPDATE
+                name = VALUES(name),
+                description = VALUES(description),
+                interest_rate = VALUES(interest_rate),
+                min_opening_deposit = VALUES(min_opening_deposit),
+                min_balance_for_interest = VALUES(min_balance_for_interest),
+                lock_in_period_days = VALUES(lock_in_period_days),
+                status = VALUES(status)
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'                       => $id,
+            'code'                     => $data['code'] ?? ('SP-' . mt_rand(100, 999)),
+            'name'                     => $data['name'],
+            'description'              => $data['description'] ?? '',
+            'interest_rate'            => (float)($data['interest_rate'] ?? 2),
+            'min_opening_deposit'      => (float)($data['min_opening_deposit'] ?? 500),
+            'min_balance_for_interest' => (float)($data['min_balance_for_interest'] ?? 1000),
+            'lock_in_period_days'      => (int)($data['lock_in_period_days'] ?? 0),
+            'status'                   => $data['status'] ?? 'Active'
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
+
+    public function deleteSavingsProduct(string $id): bool
+    {
+        return $this->db->prepare("DELETE FROM savings_products WHERE id = ?")->execute([$id]);
+    }
+
+    public function getFees(): array
+    {
+        return $this->fetchAll('fees');
+    }
+
+    public function saveFee(array $data): array
+    {
+        $id = $data['id'] ?? ('fee_' . bin2hex(random_bytes(4)));
+        $sql = "
+            INSERT INTO fees (id, code, name, calculation_type, amount, active)
+            VALUES (:id, :code, :name, :calculation_type, :amount, :active)
+            ON DUPLICATE KEY UPDATE
+                code = VALUES(code),   
+                name = VALUES(name),
+                calculation_type = VALUES(calculation_type),
+                amount = VALUES(amount),
+                active = VALUES(active)
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'         => $id,
+            'code'       => $data['code'] ?? ('FEE-' . mt_rand(100, 999)),
+            'name'       => $data['name'],
+            'calculation_type'   => $data['calculation_type'] ?? 'Fixed',
+            'amount'     => (float)($data['amount'] ?? $data['fixed_amount'] ?? 0),
+            'active'     => isset($data['active']) ? (int)$data['active'] : 1
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
+
+    public function updateSystemSettings(array $data): bool
+    {
+        foreach ($data as $key => $val) {
+            $stmt = $this->db->prepare("
+                INSERT INTO system_settings (id, `key`, `value`)
+                VALUES (:id, :key, :value)
+                ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)
+            ");
+            $stmt->execute([
+                'id'    => 'set_' . preg_replace('/[^a-zA-Z0-9_]/', '', $key),
+                'key'   => $key,
+                'value' => is_string($val) ? $val : json_encode($val)
+            ]);
+        }
+        return true;
+    }
+
+    public function getApprovalRules(): array
+    {
+        return $this->fetchAll('approval_rules');
+    }
+
+    public function saveApprovalRule(array $data): array
+    {
+        $id = $data['id'] ?? ('ar_' . bin2hex(random_bytes(4)));
+        $sql = "
+            INSERT INTO approval_rules (id, workflow_id, min_amount, max_amount, required_role, step_order)
+            VALUES (:id, :workflow_id, :min_amount, :max_amount, :required_role, :step_order)
+            ON DUPLICATE KEY UPDATE
+                min_amount = VALUES(min_amount),
+                max_amount = VALUES(max_amount),
+                required_role = VALUES(required_role),
+                step_order = VALUES(step_order)
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'            => $id,
+            'workflow_id'   => $data['workflow_id'] ?? 'wf_loan_origination',
+            'min_amount'    => (float)($data['min_amount'] ?? 0),
+            'max_amount'    => (float)($data['max_amount'] ?? 1000000),
+            'required_role' => $data['required_role'] ?? 'Loan Officer',
+            'step_order'    => (int)($data['step_order'] ?? 1)
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
+
+    public function getApprovalWorkflows(): array
+    {
+        return $this->fetchAll('approval_workflows');
+    }
+
+    public function getCustomFields(): array
+    {
+        return $this->fetchAll('custom_fields');
+    }
+
+    public function saveCustomField(array $data): array
+    {
+        $id = $data['id'] ?? ('cf_' . bin2hex(random_bytes(4)));
+        $sql = "
+            INSERT INTO custom_fields (id, entity_type, field_name, field_label, field_type, is_required)
+            VALUES (:id, :entity_type, :field_name, :field_label, :field_type, :is_required)
+            ON DUPLICATE KEY UPDATE
+                field_label = VALUES(field_label),
+                field_type = VALUES(field_type),
+                is_required = VALUES(is_required)
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'          => $id,
+            'entity_type' => $data['entity_type'] ?? 'member',
+            'field_name'  => $data['field_name'] ?? ('custom_' . mt_rand(100, 999)),
+            'field_label' => $data['field_label'] ?? 'Custom Field',
+            'field_type'  => $data['field_type'] ?? 'text',
+            'is_required' => !empty($data['is_required']) ? 1 : 0
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
+
+    public function updateNumberingFormat(string $id, array $data): array
+    {
+        $stmt = $this->db->prepare("
+            UPDATE numbering_formats
+            SET prefix = :prefix, next_sequence = :next_sequence, padding = :padding
+            WHERE id = :id OR entity_type = :id
+        ");
+        $stmt->execute([
+            'id'            => $id,
+            'prefix'        => $data['prefix'] ?? '',
+            'next_sequence' => (int)($data['next_sequence'] ?? 1),
+            'padding'       => (int)($data['padding'] ?? 5)
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
+
+    public function updatePaymentAllocationRule(string $id, array $data): array
+    {
+        $stmt = $this->db->prepare("
+            UPDATE payment_allocation_rules
+            SET priority_order = :priority_order
+            WHERE id = :id
+        ");
+        $stmt->execute([
+            'id'             => $id,
+            'priority_order' => (int)($data['priority_order'] ?? 1)
+        ]);
+        return array_merge(['id' => $id], $data);
+    }
 }

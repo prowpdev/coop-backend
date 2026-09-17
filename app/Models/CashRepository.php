@@ -102,4 +102,108 @@ class CashRepository
             throw $e;
         }
     }
+
+    public function save(array $data): array
+    {
+        $id = $data['id'] ?? ('cash_' . bin2hex(random_bytes(6)));
+        $name = $data['name'] ?? 'Cash Vault Account';
+        $accountNo = $data['account_number'] ?? $data['account_code'] ?? ('CASH-' . mt_rand(1000, 9999));
+        $bankName = $data['bank_name'] ?? 'Cash Depository';
+        $branchId = $data['branch_id'] ?? 'branch_tar';
+        $glId = $data['gl_account_id'] ?? 'acc_1110';
+        $opening = (float)($data['opening_balance'] ?? 0);
+        $current = isset($data['current_balance']) ? (float)$data['current_balance'] : $opening;
+        $currency = $data['currency'] ?? 'PHP';
+        $active = isset($data['active']) ? (int)$data['active'] : 1;
+
+        $sql = "
+            INSERT INTO cash_accounts (id, name, account_number, bank_name, branch_id, gl_account_id, opening_balance, current_balance, currency, active)
+            VALUES (:id, :name, :account_number, :bank_name, :branch_id, :gl_account_id, :opening_balance, :current_balance, :currency, :active)
+            ON DUPLICATE KEY UPDATE
+                name = VALUES(name),
+                account_number = VALUES(account_number),
+                bank_name = VALUES(bank_name),
+                gl_account_id = VALUES(gl_account_id),
+                current_balance = VALUES(current_balance),
+                active = VALUES(active)
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'              => $id,
+            'name'            => $name,
+            'account_number'  => $accountNo,
+            'bank_name'       => $bankName,
+            'branch_id'       => $branchId,
+            'gl_account_id'   => $glId,
+            'opening_balance' => $opening,
+            'current_balance' => $current,
+            'currency'        => $currency,
+            'active'          => $active
+        ]);
+
+        return $this->find($id) ?? $data;
+    }
+
+    public function delete(string $id): bool
+    {
+        $stmt = $this->db->prepare("DELETE FROM cash_accounts WHERE id = ?");
+        return $stmt->execute([$id]);
+    }
+
+    public function replenish(string $accountId, float $amount, ?string $sourceId, string $notes, string $date): array
+    {
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Replenishment amount must be greater than zero.');
+        }
+
+        $this->db->beginTransaction();
+
+        try {
+            $toStmt = $this->db->prepare("SELECT * FROM cash_accounts WHERE id = ? FOR UPDATE");
+            $toStmt->execute([$accountId]);
+            $target = $toStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$target) {
+                throw new \RuntimeException('Cash account not found.');
+            }
+
+            if ($sourceId) {
+                $fromStmt = $this->db->prepare("SELECT * FROM cash_accounts WHERE id = ? FOR UPDATE");
+                $fromStmt->execute([$sourceId]);
+                $source = $fromStmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($source && (float)$source['current_balance'] < $amount) {
+                    throw new \RuntimeException('Insufficient funds in source account.');
+                }
+
+                if ($source) {
+                    $newSourceBal = (float)$source['current_balance'] - $amount;
+                    $this->db->prepare("UPDATE cash_accounts SET current_balance = ? WHERE id = ?")->execute([$newSourceBal, $sourceId]);
+                }
+            }
+
+            $newTargetBal = (float)$target['current_balance'] + $amount;
+            $this->db->prepare("UPDATE cash_accounts SET current_balance = ? WHERE id = ?")->execute([$newTargetBal, $accountId]);
+
+            $ref = 'REP-' . date('Ymd') . '-' . mt_rand(100, 999);
+            $txStmt = $this->db->prepare("
+                INSERT INTO cash_transactions (id, cash_account_id, type, amount, running_balance, reference_number, transaction_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $txStmt->execute(['ctx_' . bin2hex(random_bytes(6)), $accountId, 'Replenishment', $amount, $newTargetBal, $ref, $date, $notes]);
+
+            $this->db->commit();
+
+            return [
+                'reference'       => $ref,
+                'amount'          => $amount,
+                'current_balance' => $newTargetBal,
+                'account'         => $this->find($accountId)
+            ];
+        } catch (\Exception $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
 }

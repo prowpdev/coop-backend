@@ -67,6 +67,7 @@ class ShareCapitalController extends BaseController
 
     /**
      * POST /api/share-capital/payments
+     * POST /api/share-capital/pay
      */
     public function payment(): never
     {
@@ -82,6 +83,11 @@ class ShareCapitalController extends BaseController
         } catch (\Exception $e) {
             $this->error($e->getMessage(), 400);
         }
+    }
+
+    public function pay(): never
+    {
+        $this->payment();
     }
 
     /**
