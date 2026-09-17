@@ -98,7 +98,7 @@ class LoanRepository
     /**
      * Disburse / Create a new loan with full amortization schedule
      */
-    public function createLoan(array $data): array
+public function createLoan(array $data): array
     {
         $this->db->beginTransaction();
 
@@ -106,21 +106,46 @@ class LoanRepository
             $id = $data['id'] ?? ('ln_' . bin2hex(random_bytes(6)));
             $accountNo = $data['loan_account_no'] ?? ('LN-' . date('Y') . '-' . str_pad((string)mt_rand(1, 99999), 5, '0', STR_PAD_LEFT));
 
+            $productStmt = $this->db->prepare('SELECT * FROM loan_products WHERE id = ?');
+            $productStmt->execute([$data['loan_product_id']]);
+            $product = $productStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$product) {
+                throw new \InvalidArgumentException('Loan product not found.');
+            }
+
             $principal = (float)$data['principal_amount'];
-            $rate      = (float)$data['annual_interest_rate'];
+            $rate      = (float)($data['annual_interest_rate'] ?? $product['annual_interest_rate']);
             $term      = (int)$data['term_months'];
-            $method    = $data['interest_calculation_method'] ?? 'Diminishing Balance';
+            $method    = $data['interest_calculation_method'] ?? $product['interest_calculation_method'];
             $startDate = $data['disbursement_date'] ?? date('Y-m-d');
+            $frequency = $data['payment_frequency'] ?? $product['payment_frequency'];
+            $firstDueDate = $data['first_due_date'] ?? (new \DateTime($startDate))->modify('+1 month')->format('Y-m-d');
+            $maturityDate = $data['maturity_date'] ?? (new \DateTime($firstDueDate))->modify('+' . max(0, $term - 1) . ' months')->format('Y-m-d');
+            $processingFee = (float)($data['processing_fee'] ?? 0);
+            $serviceFee = (float)($data['service_fee'] ?? 0);
+            $netDisbursed = isset($data['net_disbursed'])
+                ? (float)$data['net_disbursed']
+                : max(0, $principal - $processingFee - $serviceFee);
+            $cashAccountId = $data['disbursed_from_cash_account_id'] ?? $data['cash_account_id'] ?? null;
+
+            if (!$cashAccountId) {
+                throw new \InvalidArgumentException('Disbursement cash account is required.');
+            }
 
             // Insert loan record
             $sql = "INSERT INTO loans (
                 id, loan_account_no, member_id, loan_product_id, product_version, branch_id,
-                principal_amount, annual_interest_rate, term_months, disbursement_date,
-                current_balance, status
+                principal_amount, annual_interest_rate, interest_calculation_method, term_months,
+                payment_frequency, disbursement_date, first_due_date, maturity_date,
+                processing_fee, service_fee, net_disbursed, disbursed_from_cash_account_id,
+                status, current_balance, total_principal_paid, total_interest_paid,
+                total_penalty_paid, total_fees_paid, approved_by, approved_date
             ) VALUES (
                 :id, :loan_account_no, :member_id, :loan_product_id, :product_version, :branch_id,
-                :principal_amount, :annual_interest_rate, :term_months, :disbursement_date,
-                :current_balance, :status
+                :principal_amount, :annual_interest_rate, :interest_calculation_method, :term_months,
+                :payment_frequency, :disbursement_date, :first_due_date, :maturity_date,
+                :processing_fee, :service_fee, :net_disbursed, :disbursed_from_cash_account_id,
+                :status, :current_balance, 0, 0, 0, 0, :approved_by, :approved_date
             )";
 
             $stmt = $this->db->prepare($sql);
@@ -129,14 +154,24 @@ class LoanRepository
                 'loan_account_no'      => $accountNo,
                 'member_id'            => $data['member_id'],
                 'loan_product_id'      => $data['loan_product_id'],
-                'product_version'      => $data['product_version'] ?? 1,
+                'product_version'      => $data['product_version'] ?? ($product['version'] ?? 1),
                 'branch_id'            => $data['branch_id'],
                 'principal_amount'     => $principal,
                 'annual_interest_rate' => $rate,
+                'interest_calculation_method' => $method,
                 'term_months'          => $term,
+                'payment_frequency'    => $frequency,
                 'disbursement_date'    => $startDate,
+                'first_due_date'       => $firstDueDate,
+                'maturity_date'        => $maturityDate,
+                'processing_fee'       => $processingFee,
+                'service_fee'          => $serviceFee,
+                'net_disbursed'        => $netDisbursed,
+                'disbursed_from_cash_account_id' => $cashAccountId,
                 'current_balance'      => $principal,
-                'status'               => 'Active',
+                'status'               => $data['status'] ?? 'Active',
+                'approved_by'          => $data['approved_by'] ?? $data['performed_by'] ?? null,
+                'approved_date'        => $data['approved_date'] ?? date('Y-m-d'),
             ]);
 
             // Generate Amortization Schedule
@@ -145,7 +180,8 @@ class LoanRepository
                 $rate,
                 $term,
                 $method,
-                $startDate
+                $startDate,
+                $frequency
             );
 
             $schedStmt = $this->db->prepare("
@@ -178,6 +214,7 @@ class LoanRepository
             throw $e;
         }
     }
+
 
     /**
      * Record loan repayment and allocate against unpaid schedule installments

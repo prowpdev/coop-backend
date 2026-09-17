@@ -145,4 +145,13 @@ class CashController extends BaseController
             $this->error($e->getMessage(), 400);
         }
     }
+
+    public function autoAlign(): never
+    {
+        $updated = $this->cash->autoAlignGl();
+        $this->success([
+            'count' => $updated,
+            'accounts' => $this->cash->all()
+        ], "Auto-aligned {$updated} cash and bank accounts to CDA Chart of Accounts.");
+    }
 }

@@ -92,7 +92,7 @@ class AccountingController extends BaseController
 
         try {
             $entry = $this->accounting->createJournalEntry($input);
-            $this->success($entry, 'Journal entry posted successfully.', 200);
+            $this->success($entry, 'Journal entry posted successfully.', 201);
         } catch (\Exception $e) {
             $this->error($e->getMessage(), 400);
         }

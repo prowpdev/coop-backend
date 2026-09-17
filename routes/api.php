@@ -41,8 +41,15 @@ $router->get('/api/branches', [ConfigController::class, 'branches']);
 $router->get('/api/config/branches', [ConfigController::class, 'branches']);
 $router->post('/api/branches', [ConfigController::class, 'storeBranch']);
 $router->post('/api/config/branches', [ConfigController::class, 'storeBranch']);
+//Loan Products
 $router->get('/api/loan-products', [ConfigController::class, 'loanProducts']);
 $router->get('/api/config/loan-products', [ConfigController::class, 'loanProducts']);
+$router->get('/api/config/loan-products/:id', [ConfigController::class, 'loanProduct']);
+$router->post('/api/config/loan-products', [ConfigController::class, 'storeLoanProduct']);
+$router->put('/api/config/loan-products/:id', [ConfigController::class, 'updateLoanProduct']);
+$router->delete('/api/config/loan-products/:id', [ConfigController::class, 'destroyLoanProduct']);
+
+
 $router->get('/api/savings-products', [ConfigController::class, 'savingsProducts']);
 $router->get('/api/config/savings-products', [ConfigController::class, 'savingsProducts']);
 $router->get('/api/feature-toggles', [ConfigController::class, 'featureToggles']);
@@ -66,6 +73,10 @@ $router->get('/api/loans/:id', [LoanController::class, 'show']);
 $router->get('/api/loans/:id/schedule', [LoanController::class, 'schedule']);
 $router->post('/api/loans/payments', [LoanController::class, 'payment']);
 $router->delete('/api/loans/:id', [LoanController::class, 'destroy']);
+// Apply Loan
+$router->post('/api/loans/apply', [LoanController::class, 'originate']);
+$router->post('/api/loans/calculate-schedule', [LoanController::class, 'calculateSchedule']);
+
 
 // Savings Accounts
 $router->get('/api/savings/accounts', [SavingsController::class, 'index']);
@@ -117,4 +128,6 @@ $router->get('/api/dashboard/stats', [ReportController::class, 'dashboardStats']
 
 // Fees
 $router->post('/api/config/fees', [ConfigController::class, 'storeFee']);
+
+$router->get('/api/config/payment-allocation-rules/alloc_cda_std', [ConfigController::class, 'getAllocationRules']);
 

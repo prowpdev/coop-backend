@@ -35,7 +35,7 @@ class CashRepository
 
     public function find(string $id): ?array
     {
-        $stmt = $this->db->prepare("SELECT * FROM cash_accounts WHERE id = ? OR account_code = ? LIMIT 1");
+        $stmt = $this->db->prepare("SELECT * FROM cash_accounts WHERE id = ? OR account_number = ? LIMIT 1");
         $stmt->execute([$id, $id]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ?: null;
@@ -123,6 +123,7 @@ class CashRepository
                 name = VALUES(name),
                 account_number = VALUES(account_number),
                 bank_name = VALUES(bank_name),
+                branch_id = VALUES(branch_id),
                 gl_account_id = VALUES(gl_account_id),
                 current_balance = VALUES(current_balance),
                 active = VALUES(active)
@@ -205,5 +206,37 @@ class CashRepository
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    public function autoAlignGl(): int
+    {
+        $accounts = $this->all();
+        $updated = 0;
+        foreach ($accounts as $a) {
+            $num = strtoupper($a['account_number'] ?? '');
+            $name = strtolower($a['name'] ?? '');
+            $bank = strtolower($a['bank_name'] ?? '');
+            $targetGl = $a['gl_account_id'];
+
+            if (str_contains($bank, 'land bank') || str_contains($name, 'land bank')) {
+                $targetGl = 'acc_1120';
+            } elseif (str_contains($bank, 'development bank') || str_contains($bank, 'dbp') || str_contains($name, 'dbp')) {
+                $targetGl = 'acc_1121';
+            } elseif (str_contains($bank, 'maya') || str_contains($name, 'maya') || str_contains($name, 'gcash') || str_contains($name, 'wallet')) {
+                $targetGl = 'acc_1130';
+            } elseif (str_contains($name, 'petty') || str_contains($bank, 'petty')) {
+                $targetGl = 'acc_1111';
+            } elseif (str_starts_with($num, 'COH-') || str_contains($name, 'teller') || str_contains($name, 'drawer')) {
+                $targetGl = 'acc_1110';
+            } elseif (str_starts_with($num, 'VLT-') || str_contains($name, 'vault') || str_contains($bank, 'vault')) {
+                $targetGl = 'acc_1112';
+            }
+
+            if ($targetGl !== $a['gl_account_id']) {
+                $this->db->prepare("UPDATE cash_accounts SET gl_account_id = ? WHERE id = ?")->execute([$targetGl, $a['id']]);
+                $updated++;
+            }
+        }
+        return $updated;
     }
 }

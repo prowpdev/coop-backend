@@ -108,7 +108,12 @@ class LoanController extends BaseController
 
     public function apply(): never
     {
-        $this->store();
+        $input = $this->getRequestBody();
+        $input['disbursed_from_cash_account_id'] = $input['disbursed_from_cash_account_id']
+            ?? $input['cash_account_id']
+            ?? null;
+        $input['status'] = $input['status'] ?? 'Active';
+        $this->store($input);
     }
 
     /**
@@ -145,10 +150,47 @@ class LoanController extends BaseController
     /**
      * POST /api/loans
      */
-    public function store(): never
+    
+    public function store(?array $requestInput = null): never
     {
-        $input = $this->getRequestBody();
+        $input = $requestInput ?? $this->getRequestBody();
 
+        if (empty($input['branch_id'])) {
+            $this->error('Branch is required.', 422);
+        }
+        if (empty($input['disbursed_from_cash_account_id']) && empty($input['cash_account_id'])) {
+            $this->error('Disbursement cash account is required.', 422);
+        }
+        $input['disbursed_from_cash_account_id'] = $input['disbursed_from_cash_account_id']
+            ?? $input['cash_account_id'];
+
+        if (empty($input['first_due_date'])) {
+            $input['first_due_date'] = (new \DateTime($input['disbursement_date'] ?? 'now'))
+                ->modify('+1 month')->format('Y-m-d');
+        }
+
+        if (empty($input['maturity_date'])) {
+            $input['maturity_date'] = (new \DateTime($input['first_due_date']))
+                ->modify('+' . max(0, (int)($input['term_months'] ?? 12) - 1) . ' months')
+                ->format('Y-m-d');
+        }
+
+        if (empty($input['payment_frequency'])) {
+            $input['payment_frequency'] = 'Monthly';
+        }
+
+        if (!isset($input['net_disbursed'])) {
+            $principal = (float)($input['principal_amount'] ?? 0);
+            $processingFee = (float)($input['processing_fee'] ?? 0);
+            $serviceFee = (float)($input['service_fee'] ?? 0);
+            $input['net_disbursed'] = max(0, $principal - $processingFee - $serviceFee);
+        }
+
+        $this->persistLoan($input);
+    }
+
+    private function persistLoan(array $input): never
+    {
         if (empty($input['member_id']) || empty($input['loan_product_id']) || empty($input['principal_amount'])) {
             $this->error('Member, Loan Product, and Principal Amount are required.', 422);
         }

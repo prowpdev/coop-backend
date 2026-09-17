@@ -16,7 +16,24 @@ class ConfigController extends BaseController
         parent::__construct($db);
         $this->config = new ConfigRepository($db);
     }
+    
+    public function loanProduct(string $id): never
+    {
+        $product = $this->config->getLoanProduct($id);
+        if (!$product) {
+            $this->error('Loan product not found.', 404);
+        }
+        $this->success($product);
+    }
 
+    
+    public function getLoanProduct(string $id): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM loan_products WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    }
+    
     /**
      * GET /api/config/all
      */
@@ -299,5 +316,13 @@ class ConfigController extends BaseController
         $input = $this->getRequestBody();
         $saved = $this->config->updatePaymentAllocationRule($id, $input);
         $this->success($saved, 'Payment allocation rule updated successfully.');
+    }
+
+    /**
+     * GET /api/config/payment-allocation-rules/alloc_cda_std
+     */
+    public function getAllocationRules(): never
+    {
+        $this->success($this->config->getAllocationRules());
     }
 }

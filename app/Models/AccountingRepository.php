@@ -187,16 +187,14 @@ class AccountingRepository
             $voucherNo = $data['voucher_number'] ?? ('JV-' . date('Ymd') . '-' . str_pad((string)mt_rand(1, 9999), 4, '0', STR_PAD_LEFT));
             $postingDate = $data['posting_date'] ?? date('Y-m-d');
             $branchId = $data['branch_id'] ?? 'br_main';
-            $createdBy = $data['performed_by'] ?? $data['created_by'] ?? 'system';
-            $periodId = $this->resolvePeriodId($data['period_id'] ?? null, $postingDate);
 
             $sql = "
                 INSERT INTO journal_entries (
                     id, voucher_number, branch_id, posting_date, reference_type,
-                    description, total_debit, total_credit, period_id, status, created_by
+                    description, total_debit, total_credit, period_id, status
                 ) VALUES (
                     :id, :voucher_number, :branch_id, :posting_date, :reference_type,
-                    :description, :total_debit, :total_credit, :period_id, 'Posted' , :created_by
+                    :description, :total_debit, :total_credit, :period_id, 'Posted'
                 )
             ";
 
@@ -210,8 +208,7 @@ class AccountingRepository
                 'description'    => $data['description'] ?? 'Manual Journal Voucher',
                 'total_debit'    => $totalDebit,
                 'total_credit'   => $totalCredit,
-                'period_id'      => $periodId,
-                'created_by'     => $createdBy,
+                'period_id'      => $data['period_id'] ?? ('period_' . date('Ym')),
             ]);
 
             $lineSql = "
@@ -239,35 +236,6 @@ class AccountingRepository
             $this->db->rollBack();
             throw $e;
         }
-    }
-
-    private function resolvePeriodId(?string $periodId, string $postingDate): string
-    {
-        if ($periodId !== null && $periodId !== '') {
-            $stmt = $this->db->prepare('SELECT id FROM accounting_periods WHERE id = ? LIMIT 1');
-            $stmt->execute([$periodId]);
-            if ($stmt->fetchColumn() !== false) {
-                return $periodId;
-            }
-
-            throw new \InvalidArgumentException("Accounting period '{$periodId}' does not exist.");
-        }
-
-        $stmt = $this->db->prepare('
-            SELECT id
-            FROM accounting_periods
-            WHERE start_date <= ? AND end_date >= ?
-            ORDER BY start_date DESC
-            LIMIT 1
-        ');
-        $stmt->execute([$postingDate, $postingDate]);
-        $resolvedPeriodId = $stmt->fetchColumn();
-
-        if ($resolvedPeriodId === false) {
-            throw new \InvalidArgumentException("No accounting period covers posting date '{$postingDate}'.");
-        }
-
-        return (string)$resolvedPeriodId;
     }
 
     /**
