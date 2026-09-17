@@ -85,7 +85,7 @@ class ShareCapitalRepository
                 paid_up_shares, paid_up_amount, status
             ) VALUES (
                 :id, :account_number, :member_id, :subscribed_shares, :subscribed_amount,
-                :paid_up_shares, :paid_up_amount, 'Active'
+                :paid_up_shares, :paid_up_amount, :status
             )";
 
             $stmt = $this->db->prepare($sql);
@@ -97,24 +97,25 @@ class ShareCapitalRepository
                 'subscribed_amount' => $subscribedAmount,
                 'paid_up_shares'    => $paidUpShares,
                 'paid_up_amount'    => $paidUpAmount,
+                'status'            => $data['status'] ?? 'Active',
             ]);
 
             if ($paidUpAmount > 0) {
                 $txStmt = $this->db->prepare("
                     INSERT INTO share_capital_transactions (
-                        id, share_capital_account_id, transaction_type, shares, amount,
-                        running_shares, running_amount, reference_number, transaction_date, notes
-                    ) VALUES (?, ?, 'Subscription Payment', ?, ?, ?, ?, ?, ?, 'Initial CBU Payment')
+                        id, receipt_no, share_account_id, member_id, type, shares, amount,
+                        transaction_date, cash_account_id
+                    ) VALUES (?, ?, ?, ?, 'PAYMENT', ?, ?, ?, ?)
                 ");
                 $txStmt->execute([
                     'sctx_' . bin2hex(random_bytes(6)),
-                    $id,
-                    $paidUpShares,
-                    $paidUpAmount,
-                    $paidUpShares,
-                    $paidUpAmount,
                     'SC-OR-' . date('Ymd') . '-' . mt_rand(100, 999),
-                    $data['payment_date'] ?? date('Y-m-d')
+                    $id,
+                    $data['member_id'],
+                    $paidUpShares,
+                    $paidUpAmount,
+                    $data['payment_date'] ?? date('Y-m-d'),
+                    $data['cash_account_id'] ?? null
                 ]);
             }
 
@@ -131,7 +132,7 @@ class ShareCapitalRepository
      */
     public function recordPayment(array $data): array
     {
-        $accountId = $data['share_capital_account_id'];
+        $accountId = $data['account_id'];
         $amount    = (float)$data['amount'];
         $parValue  = (float)($data['par_value'] ?? 100);
         $shares    = (int)($data['shares'] ?? ($amount / $parValue));
@@ -162,20 +163,19 @@ class ShareCapitalRepository
             $txId = 'sctx_' . bin2hex(random_bytes(6));
             $txStmt = $this->db->prepare("
                 INSERT INTO share_capital_transactions (
-                    id, share_capital_account_id, transaction_type, shares, amount,
-                    running_shares, running_amount, reference_number, transaction_date, notes
-                ) VALUES (?, ?, 'Subscription Payment', ?, ?, ?, ?, ?, ?, ?)
+                    id, receipt_no, share_account_id, member_id, type, shares, amount,
+                    transaction_date, cash_account_id
+                ) VALUES (?, ?, ?, ?, 'PAYMENT', ?, ?, ?, ?)
             ");
             $txStmt->execute([
                 $txId,
+                $ref,
                 $accountId,
+                $acc['member_id'],
                 $shares,
                 $amount,
-                $newPaidShares,
-                $newPaidAmount,
-                $ref,
                 $date,
-                $data['notes'] ?? 'Share capital subscription deposit'
+                $data['cash_account_id'] ?? null
             ]);
 
             $this->db->commit();
@@ -201,7 +201,7 @@ class ShareCapitalRepository
     {
         $stmt = $this->db->prepare("
             SELECT * FROM share_capital_transactions
-            WHERE share_capital_account_id = ?
+            WHERE share_account_id = ?
             ORDER BY transaction_date DESC, created_at DESC
         ");
         $stmt->execute([$accountId]);

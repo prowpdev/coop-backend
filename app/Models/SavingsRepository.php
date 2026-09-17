@@ -61,9 +61,9 @@ class SavingsRepository
                    sp.name AS product_name,
                    b.name AS branch_name
             FROM savings_accounts sa
-            JOIN members m ON sa.member_id = m.id
-            JOIN savings_products sp ON sa.savings_product_id = sp.id
-            JOIN branches b ON sa.branch_id = b.id
+                 LEFT JOIN members m ON sa.member_id = m.id
+                 LEFT JOIN savings_products sp ON sa.savings_product_id = sp.id
+                 LEFT JOIN branches b ON sa.branch_id = b.id
             WHERE sa.id = ? OR sa.account_number = ?
             LIMIT 1
         ");
@@ -104,16 +104,17 @@ class SavingsRepository
             if ($initialDeposit > 0) {
                 $txStmt = $this->db->prepare("
                     INSERT INTO savings_transactions (
-                        id, savings_account_id, transaction_type, amount, running_balance,
-                        reference_number, transaction_date, notes
-                    ) VALUES (?, ?, 'Deposit', ?, ?, ?, ?, 'Initial Opening Deposit')
+                        id, transaction_no, savings_account_id, member_id, type, amount,
+                        balance_after, transaction_date, notes
+                    ) VALUES (?, ?, ?, ?, 'DEPOSIT', ?, ?, ?, 'Initial Opening Deposit')
                 ");
                 $txStmt->execute([
                     'stx_' . bin2hex(random_bytes(6)),
-                    $id,
-                    $initialDeposit,
-                    $initialDeposit,
                     'DEP-' . date('Ymd') . '-' . mt_rand(100, 999),
+                    $id,
+                    $data['member_id'],
+                    $initialDeposit,
+                    $initialDeposit,
                     $data['opened_date'] ?? date('Y-m-d')
                 ]);
             }
@@ -146,10 +147,15 @@ class SavingsRepository
     public function recordTransaction(array $data): array
     {
         $accountId = $data['savings_account_id'];
-        $type      = $data['transaction_type']; // 'Deposit' or 'Withdrawal'
+        $type      = $data['transaction_type'] ?? 'Deposit'; // 'Deposit' or 'Withdrawal'
         $amount    = (float)$data['amount'];
         $date      = $data['transaction_date'] ?? date('Y-m-d');
         $ref       = $data['reference_number'] ?? ('TX-' . date('Ymd') . '-' . mt_rand(1000, 9999));
+        $dbType    = strtoupper($type);
+
+        if (!in_array($dbType, ['DEPOSIT', 'WITHDRAWAL'], true)) {
+            throw new \InvalidArgumentException('Transaction type must be Deposit or Withdrawal.');
+        }
 
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Transaction amount must be positive.');
@@ -169,11 +175,15 @@ class SavingsRepository
 
             $currentBal = (float)$acc['balance'];
 
-            if ($type === 'Withdrawal' && $currentBal < $amount) {
+            if ($dbType === 'WITHDRAWAL' && $currentBal < $amount) {
                 throw new \RuntimeException('Insufficient savings balance for withdrawal.');
             }
 
-            $newBal = ($type === 'Deposit') ? ($currentBal + $amount) : ($currentBal - $amount);
+            $newBal = ($dbType === 'DEPOSIT') ? ($currentBal + $amount) : ($currentBal - $amount);
+
+            $accountStmt = $this->db->prepare('SELECT member_id FROM savings_accounts WHERE id = ?');
+            $accountStmt->execute([$accountId]);
+            $account = $accountStmt->fetch(PDO::FETCH_ASSOC);
 
             // Update account balance
             $updStmt = $this->db->prepare("UPDATE savings_accounts SET balance = ? WHERE id = ?");
@@ -183,17 +193,19 @@ class SavingsRepository
             $txId = 'stx_' . bin2hex(random_bytes(6));
             $txStmt = $this->db->prepare("
                 INSERT INTO savings_transactions (
-                    id, savings_account_id, transaction_type, amount, running_balance,
-                    reference_number, transaction_date, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, transaction_no, savings_account_id, member_id, type, amount,
+                    balance_after, cash_account_id, transaction_date, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $txStmt->execute([
                 $txId,
+                $ref,
                 $accountId,
-                $type,
+                $account['member_id'],
+                $dbType,
                 $amount,
                 $newBal,
-                $ref,
+                $data['cash_account_id'] ?? null,
                 $date,
                 $data['notes'] ?? "$type transaction"
             ]);

@@ -228,15 +228,15 @@ public function createLoan(array $data): array
             $loanId    = $data['loan_id'];
             $amount    = (float)$data['amount_paid'];
             $payDate   = $data['payment_date'] ?? date('Y-m-d');
-            $refNo     = $data['or_number'] ?? ('OR-' . date('Ymd') . '-' . mt_rand(1000, 9999));
+            $refNo     = $data['or_number'] ?? $data['receipt_no'] ?? ('OR-' . date('Ymd') . '-' . mt_rand(1000, 9999));
 
-            // Insert payment receipt
-            $stmt = $this->db->prepare("
-                INSERT INTO loan_payments (
-                    id, loan_id, payment_date, amount_paid, principal_portion, interest_portion,
-                    penalty_portion, fees_portion, reference_number, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-            ");
+            $loan = $this->find($loanId);
+            if (!$loan) {
+                throw new \InvalidArgumentException('Loan not found.');
+            }
+
+            $cashAccountId = $data['cash_account_id'] ?? $loan['disbursed_from_cash_account_id'];
+            $receivedBy = $data['received_by'] ?? $data['performed_by'] ?? 'system';
 
             // Fetch unpaid schedules
             $schedStmt = $this->db->prepare("
@@ -286,25 +286,39 @@ public function createLoan(array $data): array
                 ]);
             }
 
+            $stmt = $this->db->prepare("
+                INSERT INTO loan_payments (
+                    id, receipt_no, loan_id, member_id, payment_date, total_amount,
+                    cash_account_id, received_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ");
             $stmt->execute([
                 $paymentId,
+                $refNo,
                 $loanId,
+                $loan['member_id'],
                 $payDate,
                 $amount,
-                $totalPrincipalPaid,
-                $totalInterestPaid,
-                $refNo,
-                $data['notes'] ?? 'Installment payment'
+                $cashAccountId,
+                $receivedBy
             ]);
 
             // Update loan current balance
             $updLoan = $this->db->prepare("
                 UPDATE loans
                 SET current_balance = GREATEST(0, current_balance - ?),
+                    total_principal_paid = total_principal_paid + ?,
+                    total_interest_paid = total_interest_paid + ?,
                     status = CASE WHEN (current_balance - ?) <= 0.01 THEN 'Fully Paid' ELSE status END
                 WHERE id = ?
             ");
-            $updLoan->execute([$totalPrincipalPaid, $totalPrincipalPaid, $loanId]);
+            $updLoan->execute([
+                $totalPrincipalPaid,
+                $totalPrincipalPaid,
+                $totalInterestPaid,
+                $totalPrincipalPaid,
+                $loanId
+            ]);
 
             $this->db->commit();
 

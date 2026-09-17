@@ -15,153 +15,542 @@ class ReportRepository
     /**
      * Compute Real-time CDA-compliant Trial Balance
      */
-    public function getTrialBalance(?string $asOfDate = null, ?string $branchId = null): array
-    {
-        $asOfDate = $asOfDate ?? date('Y-m-d');
+/**
+ * Compute Real-time CDA-compliant Trial Balance
+ * from posted General Ledger journal lines.
+ */
+public function getTrialBalance(
+    ?string $asOfDate = null,
+    ?string $branchId = null
+): array {
+    $asOfDate = $asOfDate ?? date('Y-m-d');
 
-        $sql = "
-            SELECT coa.id AS account_id,
-                   coa.account_code,
-                   coa.name AS account_name,
-                   coa.category,
-                   coa.normal_balance,
-                   COALESCE(SUM(jl.debit), 0) AS total_debit,
-                   COALESCE(SUM(jl.credit), 0) AS total_credit
-            FROM chart_of_accounts coa
-            LEFT JOIN journal_lines jl ON coa.id = jl.account_id
-            LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
-                AND je.status = 'Posted'
-                AND je.posting_date <= :as_of_date
-        ";
+    /**
+     * Get all Chart of Accounts.
+     */
+    $coaSql = "
+        SELECT
+            id,
+            account_code,
+            name,
+            category,
+            normal_balance
+        FROM chart_of_accounts
+        ORDER BY account_code ASC
+    ";
 
-        $params = ['as_of_date' => $asOfDate];
+    $coaStmt = $this->db->prepare($coaSql);
+    $coaStmt->execute();
 
-        if ($branchId && $branchId !== 'all') {
-            $sql .= " AND je.branch_id = :branch_id";
-            $params['branch_id'] = $branchId;
-        }
+    $accounts = $coaStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $sql .= " GROUP BY coa.id, coa.account_code, coa.name, coa.category, coa.normal_balance ORDER BY coa.account_code ASC";
+    /**
+     * Get journal lines belonging to:
+     * - Posted journal entries only
+     * - Posting date <= selected date
+     * - Optional branch
+     */
+    $sql = "
+        SELECT
+            jl.account_id,
+            COALESCE(SUM(jl.debit), 0) AS total_debit,
+            COALESCE(SUM(jl.credit), 0) AS total_credit
+        FROM journal_lines jl
+        INNER JOIN journal_entries je
+            ON je.id = jl.journal_entry_id
+        WHERE je.status = 'Posted'
+          AND je.posting_date <= :as_of_date
+    ";
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $params = [
+        'as_of_date' => $asOfDate
+    ];
 
-        $totalDebits = 0.0;
-        $totalCredits = 0.0;
-        $accounts = [];
+    if ($branchId !== null && $branchId !== '' && $branchId !== 'all') {
+        $sql .= " AND je.branch_id = :branch_id";
+        $params['branch_id'] = $branchId;
+    }
 
-        foreach ($rows as $row) {
-            $debit = (float)$row['total_debit'];
-            $credit = (float)$row['total_credit'];
+    $sql .= "
+        GROUP BY jl.account_id
+    ";
 
-            $netBalance = ($row['normal_balance'] === 'Debit')
-                ? ($debit - $credit)
-                : ($credit - $debit);
+    $stmt = $this->db->prepare($sql);
+    $stmt->execute($params);
 
-            $debitBalance = ($netBalance > 0 && $row['normal_balance'] === 'Debit') ? $netBalance : 0.0;
-            $creditBalance = ($netBalance > 0 && $row['normal_balance'] === 'Credit') ? $netBalance : 0.0;
+    $journalBalances = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            if ($netBalance < 0) {
-                if ($row['normal_balance'] === 'Debit') {
-                    $creditBalance = abs($netBalance);
-                } else {
-                    $debitBalance = abs($netBalance);
-                }
-            }
+    /**
+     * Create quick lookup:
+     *
+     * account_id => debit / credit
+     */
+    $balanceMap = [];
 
-            $totalDebits += $debitBalance;
-            $totalCredits += $creditBalance;
+    foreach ($journalBalances as $row) {
+        $accountId = (string) $row['account_id'];
 
-            $accounts[] = [
-                'account_id'     => $row['account_id'],
-                'account_code'   => $row['account_code'],
-                'account_name'   => $row['account_name'],
-                'category'       => $row['category'],
-                'normal_balance' => $row['normal_balance'],
-                'debit'          => round($debitBalance, 2),
-                'credit'         => round($creditBalance, 2),
-                'net_balance'    => round($netBalance, 2)
-            ];
-        }
-
-        return [
-            'as_of_date'      => $asOfDate,
-            'accounts'        => $accounts,
-            'total_debit'     => round($totalDebits, 2),
-            'total_credit'    => round($totalCredits, 2),
-            'is_balanced'     => abs($totalDebits - $totalCredits) < 0.01,
-            'variance'        => round($totalDebits - $totalCredits, 2)
+        $balanceMap[$accountId] = [
+            'debit' => (float) $row['total_debit'],
+            'credit' => (float) $row['total_credit']
         ];
     }
 
     /**
-     * Compute Financial Statements (Balance Sheet & Income Statement)
+     * Build Trial Balance.
      */
-    public function getFinancialStatements(?string $asOfDate = null, ?string $branchId = null): array
-    {
-        $tb = $this->getTrialBalance($asOfDate, $branchId);
+    $balances = [];
 
-        $assets = [];
-        $liabilities = [];
-        $equity = [];
-        $revenue = [];
-        $expense = [];
+    foreach ($accounts as $account) {
+        $accountId = (string) $account['id'];
 
-        $totalAssets = 0.0;
-        $totalLiabilities = 0.0;
-        $totalEquity = 0.0;
-        $totalRevenue = 0.0;
-        $totalExpense = 0.0;
+        $totalDebit = $balanceMap[$accountId]['debit'] ?? 0.0;
+        $totalCredit = $balanceMap[$accountId]['credit'] ?? 0.0;
 
-        foreach ($tb['accounts'] as $acc) {
-            $cat = $acc['category'];
-            $bal = $acc['net_balance'];
+        /**
+         * Ignore accounts with no GL activity.
+         *
+         * This matches:
+         *
+         * if (totalDebit === 0 && totalCredit === 0) continue;
+         */
+        if (
+            abs($totalDebit) < 0.000001 &&
+            abs($totalCredit) < 0.000001
+        ) {
+            continue;
+        }
 
-            switch ($cat) {
-                case 'Asset':
-                    $assets[] = $acc;
-                    $totalAssets += $bal;
-                    break;
-                case 'Liability':
-                    $liabilities[] = $acc;
-                    $totalLiabilities += $bal;
-                    break;
-                case 'Equity':
-                    $equity[] = $acc;
-                    $totalEquity += $bal;
-                    break;
-                case 'Revenue':
-                    $revenue[] = $acc;
-                    $totalRevenue += $bal;
-                    break;
-                case 'Expense':
-                    $expense[] = $acc;
-                    $totalExpense += $bal;
-                    break;
+        $normalBalance = $account['normal_balance'] ?? 'Debit';
+
+        $netDebit = 0.0;
+        $netCredit = 0.0;
+
+        /**
+         * Calculate the net balance according to
+         * the account's normal balance.
+         */
+        if ($normalBalance === 'Debit') {
+            $net = $totalDebit - $totalCredit;
+
+            if ($net >= 0) {
+                $netDebit = $net;
+            } else {
+                $netCredit = abs($net);
+            }
+        } else {
+            $net = $totalCredit - $totalDebit;
+
+            if ($net >= 0) {
+                $netCredit = $net;
+            } else {
+                $netDebit = abs($net);
             }
         }
 
-        $netSurplus = $totalRevenue - $totalExpense;
+        $balances[] = [
+            'id' => $accountId,
+
+            'code' => $account['account_code'] ?? '',
+
+            'name' => $account['name'] ?? '',
+
+            'type' => $account['category'] ?? 'Asset',
+
+            'category' => $account['category'] ?? 'Asset',
+
+            'normal_balance' => $normalBalance,
+
+            // Net Trial Balance amount
+            'debit' => round($netDebit, 2),
+
+            'credit' => round($netCredit, 2),
+
+            // Original GL movement
+            'gross_debit' => round($totalDebit, 2),
+
+            'gross_credit' => round($totalCredit, 2),
+        ];
+    }
+
+    /**
+     * Sort by account code.
+     */
+    usort(
+        $balances,
+        function (array $a, array $b): int {
+            return strnatcasecmp(
+                (string) $a['code'],
+                (string) $b['code']
+            );
+        }
+    );
+
+    /**
+     * Calculate Trial Balance totals.
+     *
+     * IMPORTANT:
+     * These use NET debit/credit values, not gross values.
+     */
+    $totalDebit = 0.0;
+    $totalCredit = 0.0;
+
+    foreach ($balances as $balance) {
+        $totalDebit += (float) $balance['debit'];
+        $totalCredit += (float) $balance['credit'];
+    }
+
+    $totalDebit = round($totalDebit, 2);
+    $totalCredit = round($totalCredit, 2);
+
+    $variance = round(
+        $totalDebit - $totalCredit,
+        2
+    );
+
+    $isBalanced = abs($variance) < 0.01;
+
+    return [
+        'balances' => $balances,
+
+        // Backwards compatibility
+        'accounts' => $balances,
+
+        'total_debit' => $totalDebit,
+
+        'total_credit' => $totalCredit,
+
+        'variance' => $variance,
+
+        'difference' => $variance,
+
+        'is_balanced' => $isBalanced
+    ];
+}
+    /**
+     * Format the trial balance data for reporting purposes
+     */
+    private function formatTrialBalanceResponse(array $data): array
+    {
+        $totalDebit = (float) ($data['total_debit'] ?? 0);
+        $totalCredit = (float) ($data['total_credit'] ?? 0);
+
+        $variance = array_key_exists('variance', $data)
+            ? (float) $data['variance']
+            : round($totalDebit - $totalCredit, 2);
+
+        $difference = array_key_exists('difference', $data)
+            ? (float) $data['difference']
+            : round($totalDebit - $totalCredit, 2);
 
         return [
-            'balance_sheet' => [
-                'as_of_date'        => $asOfDate ?? date('Y-m-d'),
-                'assets'            => $assets,
-                'total_assets'      => round($totalAssets, 2),
-                'liabilities'       => $liabilities,
-                'total_liabilities' => round($totalLiabilities, 2),
-                'equity'            => $equity,
-                'total_equity'      => round($totalEquity, 2),
-                'net_surplus'       => round($netSurplus, 2),
-                'balanced'          => abs($totalAssets - ($totalLiabilities + $totalEquity + $netSurplus)) < 0.01
+            'as_of_date' => $data['as_of_date'] ?? null,
+
+            // Frontend expects balances
+            'balances' => $data['accounts'] ?? [],
+
+            // Keep accounts for backward compatibility
+            'accounts' => $data['accounts'] ?? [],
+
+            'total_debit' => round($totalDebit, 2),
+
+            'total_credit' => round($totalCredit, 2),
+
+            'variance' => round($variance, 2),
+
+            'difference' => round($difference, 2),
+
+            'is_balanced' => $data['is_balanced']
+                ?? (abs($totalDebit - $totalCredit) < 0.01),
+        ];
+    }
+
+     /**
+     * Compute Financial Statements dynamically
+    * using Chart of Accounts and Financial Statement Mappings.
+    *
+    * Generates:
+    * - Statement of Financial Position
+    * - Statement of Operations
+    */
+    public function getFinancialStatements(
+        ?string $asOfDate = null,
+        ?string $branchId = null
+    ): array {
+        $asOfDate = $asOfDate ?? date('Y-m-d');
+
+        /*
+        * ---------------------------------------------------------
+        * 1. Get Chart of Accounts
+        * ---------------------------------------------------------
+        */
+        $coaStmt = $this->db->prepare("
+            SELECT
+                id,
+                account_code,
+                name,
+                category,
+                normal_balance
+            FROM chart_of_accounts
+            ORDER BY account_code ASC
+        ");
+
+        $coaStmt->execute();
+
+        $accounts = $coaStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        /*
+        * ---------------------------------------------------------
+        * 2. Get posted GL balances
+        * ---------------------------------------------------------
+        */
+        $sql = "
+            SELECT
+                jl.account_id,
+                COALESCE(SUM(jl.debit), 0) AS total_debit,
+                COALESCE(SUM(jl.credit), 0) AS total_credit
+            FROM journal_lines jl
+            INNER JOIN journal_entries je
+                ON je.id = jl.journal_entry_id
+            WHERE je.status = 'Posted'
+            AND je.posting_date <= :as_of_date
+        ";
+
+        $params = [
+            'as_of_date' => $asOfDate
+        ];
+
+        if (
+            $branchId !== null &&
+            $branchId !== '' &&
+            $branchId !== 'all'
+        ) {
+            $sql .= " AND je.branch_id = :branch_id";
+            $params['branch_id'] = $branchId;
+        }
+
+        $sql .= "
+            GROUP BY jl.account_id
+        ";
+
+        $balanceStmt = $this->db->prepare($sql);
+        $balanceStmt->execute($params);
+
+        $journalBalances = $balanceStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        /*
+        * Create account balance lookup.
+        */
+        $balanceMap = [];
+
+        foreach ($journalBalances as $row) {
+            $accountId = (string) $row['account_id'];
+
+            $balanceMap[$accountId] = [
+                'debit'  => (float) $row['total_debit'],
+                'credit' => (float) $row['total_credit']
+            ];
+        }
+
+        /*
+        * ---------------------------------------------------------
+        * 3. Calculate balance for every account
+        * ---------------------------------------------------------
+        *
+        * This follows the same logic as:
+        *
+        * const net =
+        *   acc.normal_balance === 'Debit'
+        *     ? debit - credit
+        *     : credit - debit;
+        */
+        $accountBalances = [];
+
+        foreach ($accounts as $account) {
+            $accountId = (string) $account['id'];
+
+            $debit = $balanceMap[$accountId]['debit'] ?? 0.0;
+            $credit = $balanceMap[$accountId]['credit'] ?? 0.0;
+
+            $normalBalance = $account['normal_balance'] ?? 'Debit';
+
+            $net = $normalBalance === 'Debit'
+                ? ($debit - $credit)
+                : ($credit - $debit);
+
+            $accountBalances[] = [
+                'id'             => $accountId,
+                'code'           => $account['account_code'] ?? '',
+                'account_code'   => $account['account_code'] ?? '',
+                'name'           => $account['name'] ?? '',
+                'type'           => $account['category'] ?? 'Asset',
+                'category'       => $account['category'] ?? 'Asset',
+                'normal_balance' => $normalBalance,
+
+                // Same as TypeScript balance
+                'balance'        => round($net, 2),
+
+                // Optional GL information
+                'gross_debit'    => round($debit, 2),
+                'gross_credit'   => round($credit, 2)
+            ];
+        }
+
+        /*
+        * ---------------------------------------------------------
+        * 4. Get Financial Statement Mappings
+        * ---------------------------------------------------------
+        *
+        * Example mapping categories:
+        *
+        * Current Assets
+        * Non-current Assets
+        * Current Liabilities
+        * Long-term Liabilities
+        * Equity
+        * Income
+        * Expenses
+        */
+        $mappingStmt = $this->db->prepare("
+            SELECT *
+            FROM financial_statement_mappings
+            ORDER BY id ASC
+        ");
+
+        $mappingStmt->execute();
+
+        $mappings = $mappingStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        /*
+        * ---------------------------------------------------------
+        * 5. Group accounts according to mappings
+        * ---------------------------------------------------------
+        *
+        * IMPORTANT:
+        *
+        * Your TypeScript implementation does:
+        *
+        * acc.category === m.category
+        *
+        * Therefore the Chart of Accounts `category` must contain
+        * values matching financial_statement_mappings.category.
+        */
+        $categories = [];
+
+        foreach ($mappings as $mapping) {
+            $mappingCategory = $mapping['category'] ?? '';
+
+            $matchedAccounts = [];
+
+            foreach ($accountBalances as $account) {
+                if ($account['category'] === $mappingCategory) {
+                    $matchedAccounts[] = $account;
+                }
+            }
+
+            $total = 0.0;
+
+            foreach ($matchedAccounts as $account) {
+                $total += (float) $account['balance'];
+            }
+
+            $categories[] = [
+                'category' => $mappingCategory,
+                'accounts' => $matchedAccounts,
+                'total'    => round($total, 2)
+            ];
+        }
+
+        /*
+        * ---------------------------------------------------------
+        * Helper to get category total
+        * ---------------------------------------------------------
+        */
+        $getCategoryTotal = function (string $category) use ($categories): float {
+            foreach ($categories as $item) {
+                if ($item['category'] === $category) {
+                    return (float) $item['total'];
+                }
+            }
+
+            return 0.0;
+        };
+
+        /*
+        * ---------------------------------------------------------
+        * 6. Statement of Financial Position
+        * ---------------------------------------------------------
+        */
+
+        $currentAssets = $getCategoryTotal('Current Assets');
+
+        $nonCurrentAssets = $getCategoryTotal('Non-current Assets');
+
+        $totalAssets = round(
+            $currentAssets + $nonCurrentAssets,
+            2
+        );
+
+        $currentLiabilities = $getCategoryTotal(
+            'Current Liabilities'
+        );
+
+        $longTermLiabilities = $getCategoryTotal(
+            'Long-term Liabilities'
+        );
+
+        $totalLiabilities = round(
+            $currentLiabilities + $longTermLiabilities,
+            2
+        );
+
+        $totalEquity = $getCategoryTotal('Equity');
+
+        $totalLiabilitiesAndEquity = round(
+            $totalLiabilities + $totalEquity,
+            2
+        );
+
+        /*
+        * ---------------------------------------------------------
+        * 7. Statement of Operations
+        * ---------------------------------------------------------
+        */
+
+        $income = $getCategoryTotal('Income');
+
+        $expenses = $getCategoryTotal('Expenses');
+
+        $netSurplus = round(
+            $income - $expenses,
+            2
+        );
+
+        /*
+        * ---------------------------------------------------------
+        * 8. Return same structure as TypeScript
+        * ---------------------------------------------------------
+        */
+        return [
+            'statement_of_financial_position' => [
+                'categories' => $categories,
+
+                'total_assets' => $totalAssets,
+
+                'total_liabilities' => $totalLiabilities,
+
+                'total_equity' => $totalEquity,
+
+                'total_liabilities_and_equity' =>
+                    $totalLiabilitiesAndEquity
             ],
-            'income_statement' => [
-                'revenue'       => $revenue,
-                'total_revenue' => round($totalRevenue, 2),
-                'expenses'      => $expense,
-                'total_expense' => round($totalExpense, 2),
-                'net_surplus'   => round($netSurplus, 2)
+
+            'statement_of_operations' => [
+                'total_income' => $income,
+
+                'total_expenses' => $expenses,
+
+                'net_surplus' => $netSurplus
             ]
         ];
     }

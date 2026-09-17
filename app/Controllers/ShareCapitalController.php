@@ -73,7 +73,7 @@ class ShareCapitalController extends BaseController
     {
         $input = $this->getRequestBody();
 
-        if (empty($input['share_capital_account_id']) || empty($input['amount']) || (float)$input['amount'] <= 0) {
+        if (empty($input['account_id']) || empty($input['amount']) || (float)$input['amount'] <= 0) {
             $this->error('Valid Share capital account ID and payment amount are required.', 422);
         }
 

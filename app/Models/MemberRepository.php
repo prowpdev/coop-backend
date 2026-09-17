@@ -315,9 +315,17 @@ class MemberRepository
             'journal_member_name'   => $memberName,
         ]);
         $transactions = $transactionStmt->fetchAll(PDO::FETCH_ASSOC);
+        $summary = $this->generateMemberSummary(
+            $loans,
+            $savings,
+            $shareCapital,
+            $transactions,
+            $journalVouchers
+        );
 
         return [
             'member'            => $member,
+            'summary'          => $summary,
             'loans'             => $loans,
             'savings'           => $savings,
             'share_capital'     => $shareCapital,
@@ -325,4 +333,63 @@ class MemberRepository
             'transactions'      => $transactions
         ];
     }
+    /**
+ * Generate a financial summary for a member.
+ *
+ * @param array $loans
+ * @param array $savings
+ * @param array $shareCapital
+ * @param array $transactions
+ * @param array $journalVouchers
+ * @return array
+ */
+private function generateMemberSummary(
+    array $loans,
+    array $savings,
+    array $shareCapital,
+    array $transactions,
+    array $journalVouchers
+): array {
+    // Total outstanding loan balance
+    $loanBalance = array_reduce(
+        $loans,
+        fn(float $sum, array $loan): float =>
+            $sum + (float) ($loan['current_balance'] ?? 0),
+        0.0
+    );
+
+    // Total savings balance
+    $savingsBalance = array_reduce(
+        $savings,
+        fn(float $sum, array $account): float =>
+            $sum + (float) ($account['balance'] ?? 0),
+        0.0
+    );
+
+    // Total paid-up share capital
+    $shareCapitalTotal = array_reduce(
+        $shareCapital,
+        fn(float $sum, array $account): float =>
+            $sum + (float) ($account['paid_up_amount'] ?? 0),
+        0.0
+    );
+
+    // Membership fees
+    // Replace this with the actual membership fee calculation
+    $membershipFees = 0.0;
+
+    return [
+        'loan_balance' => round($loanBalance, 2),
+
+        'savings_balance' => round($savingsBalance, 2),
+
+        'share_capital' => round($shareCapitalTotal, 2),
+
+        'membership_fees' => round($membershipFees, 2),
+
+        'total_transactions' => count($transactions),
+
+        'jv_count' => count($journalVouchers),
+    ];
+}
 }

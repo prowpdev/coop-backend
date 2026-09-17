@@ -125,36 +125,50 @@ class ConfigRepository
     {
         return $this->db->prepare("DELETE FROM loan_products WHERE id = ?")->execute([$id]);
     }
-
+    //
     public function saveSavingsProduct(array $data): array
     {
         $id = $data['id'] ?? ('sp_' . bin2hex(random_bytes(4)));
         $sql = "
-            INSERT INTO savings_products (id, code, name, description, interest_rate, min_opening_deposit, min_balance_for_interest, lock_in_period_days, status)
-            VALUES (:id, :code, :name, :description, :interest_rate, :min_opening_deposit, :min_balance_for_interest, :lock_in_period_days, :status)
+            INSERT INTO savings_products (
+                id, code, name, min_balance_to_earn_interest, annual_interest_rate,
+                interest_calculation_method, min_opening_deposit, maintaining_balance,
+                gl_liability_account_id, gl_interest_expense_account_id, active
+            ) VALUES (
+                :id, :code, :name, :min_balance_to_earn_interest, :annual_interest_rate,
+                :interest_calculation_method, :min_opening_deposit, :maintaining_balance,
+                :gl_liability_account_id, :gl_interest_expense_account_id, :active
+            )
             ON DUPLICATE KEY UPDATE
                 name = VALUES(name),
-                description = VALUES(description),
-                interest_rate = VALUES(interest_rate),
+                min_balance_to_earn_interest = VALUES(min_balance_to_earn_interest),
+                annual_interest_rate = VALUES(annual_interest_rate),
+                interest_calculation_method = VALUES(interest_calculation_method),
                 min_opening_deposit = VALUES(min_opening_deposit),
-                min_balance_for_interest = VALUES(min_balance_for_interest),
-                lock_in_period_days = VALUES(lock_in_period_days),
-                status = VALUES(status)
+                maintaining_balance = VALUES(maintaining_balance),
+                gl_liability_account_id = VALUES(gl_liability_account_id),
+                gl_interest_expense_account_id = VALUES(gl_interest_expense_account_id),
+                active = VALUES(active)
         ";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             'id'                       => $id,
             'code'                     => $data['code'] ?? ('SP-' . mt_rand(100, 999)),
             'name'                     => $data['name'],
-            'description'              => $data['description'] ?? '',
-            'interest_rate'            => (float)($data['interest_rate'] ?? 2),
-            'min_opening_deposit'      => (float)($data['min_opening_deposit'] ?? 500),
-            'min_balance_for_interest' => (float)($data['min_balance_for_interest'] ?? 1000),
-            'lock_in_period_days'      => (int)($data['lock_in_period_days'] ?? 0),
-            'status'                   => $data['status'] ?? 'Active'
+            'min_balance_to_earn_interest' => (float)($data['min_balance_to_earn_interest'] ?? 1000),
+            'annual_interest_rate'         => (float)($data['annual_interest_rate'] ?? 2),
+            'interest_calculation_method' => $data['interest_calculation_method'] ?? 'Average Daily Balance',
+            'min_opening_deposit'          => (float)($data['min_opening_deposit'] ?? 500),
+            'maintaining_balance'          => (float)($data['maintaining_balance'] ?? 500),
+            'gl_liability_account_id'      => $data['gl_liability_account_id'] ?? '',
+            'gl_interest_expense_account_id' => $data['gl_interest_expense_account_id'] ?? '',
+            'active'                       => isset($data['active']) ? (int)(bool)$data['active'] : 1
         ]);
-        return array_merge(['id' => $id], $data);
+        $saved = $this->db->prepare('SELECT * FROM savings_products WHERE id = ?');
+        $saved->execute([$id]);
+        return $saved->fetch(PDO::FETCH_ASSOC) ?: array_merge(['id' => $id], $data);
     }
+
 
     public function deleteSavingsProduct(string $id): bool
     {

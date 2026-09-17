@@ -73,6 +73,7 @@ $router->get('/api/loans/:id', [LoanController::class, 'show']);
 $router->get('/api/loans/:id/schedule', [LoanController::class, 'schedule']);
 $router->post('/api/loans/payments', [LoanController::class, 'payment']);
 $router->delete('/api/loans/:id', [LoanController::class, 'destroy']);
+$router->post('/api/loans/:id/repay', [LoanController::class, 'repay']);
 // Apply Loan
 $router->post('/api/loans/apply', [LoanController::class, 'originate']);
 $router->post('/api/loans/calculate-schedule', [LoanController::class, 'calculateSchedule']);
@@ -83,6 +84,7 @@ $router->get('/api/savings/accounts', [SavingsController::class, 'index']);
 $router->post('/api/savings/accounts', [SavingsController::class, 'store']);
 $router->get('/api/savings/accounts/:id', [SavingsController::class, 'show']);
 $router->post('/api/savings/transactions', [SavingsController::class, 'transaction']);
+$router->post('/api/savings/transact', [SavingsController::class, 'transaction']);
 $router->delete('/api/savings/accounts/:id', [SavingsController::class, 'destroy']);
 
 // Share Capital (CBU)
@@ -90,6 +92,7 @@ $router->get('/api/share-capital/accounts', [ShareCapitalController::class, 'ind
 $router->post('/api/share-capital/accounts', [ShareCapitalController::class, 'store']);
 $router->get('/api/share-capital/accounts/:id', [ShareCapitalController::class, 'show']);
 $router->post('/api/share-capital/payments', [ShareCapitalController::class, 'payment']);
+$router->post('/api/share-capital/pay', [ShareCapitalController::class, 'payment']);
 $router->delete('/api/share-capital/accounts/:id', [ShareCapitalController::class, 'destroy']);
 
 // Accounting & General Ledger
@@ -119,6 +122,7 @@ $router->post('/api/config/accounting-periods/reopen', [AccountingController::cl
 $router->get('/api/cash-accounts', [CashController::class, 'index']);
 $router->get('/api/cash-accounts/:id', [CashController::class, 'show']);
 $router->post('/api/cash-accounts/transfer', [CashController::class, 'transfer']);
+$router->post('/api/config/cash-accounts', [CashController::class, 'store']);
 
 // Reports & Dashboard
 $router->get('/api/reports/trial-balance', [ReportController::class, 'trialBalance']);
@@ -128,6 +132,7 @@ $router->get('/api/dashboard/stats', [ReportController::class, 'dashboardStats']
 
 // Fees
 $router->post('/api/config/fees', [ConfigController::class, 'storeFee']);
-
+// Rules
 $router->get('/api/config/payment-allocation-rules/alloc_cda_std', [ConfigController::class, 'getAllocationRules']);
+$router->put('/api/config/approval-rules/', [ConfigController::class, 'updateApprovalRule']);
 
