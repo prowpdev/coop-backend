@@ -102,4 +102,17 @@ class ShareCapitalController extends BaseController
 
         $this->success(['id' => $id], 'Share capital account deleted.');
     }
+    /**
+     * PUT /api/share-capital/accounts/:id
+     */
+    public function update(string $id): never
+    {   
+        // $this->success(['id' => $this->getRequestBody()], 'Share capital account Updated.',200);
+        $updateAccount = $this->shareCapital->updateAccount($id, $this->getRequestBody());
+        if (!$updateAccount) {
+            $this->error('Failed to delete share capital account.', 400);
+        }
+
+        $this->success(['id' => $id], 'Share capital account Updated.');
+    }
 }

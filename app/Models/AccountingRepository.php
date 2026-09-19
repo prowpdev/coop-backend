@@ -187,14 +187,15 @@ class AccountingRepository
             $voucherNo = $data['voucher_number'] ?? ('JV-' . date('Ymd') . '-' . str_pad((string)mt_rand(1, 9999), 4, '0', STR_PAD_LEFT));
             $postingDate = $data['posting_date'] ?? date('Y-m-d');
             $branchId = $data['branch_id'] ?? 'br_main';
+            $created_by = $data['created_by'];
 
             $sql = "
                 INSERT INTO journal_entries (
                     id, voucher_number, branch_id, posting_date, reference_type,
-                    description, total_debit, total_credit, period_id, status
+                    description, total_debit, total_credit, period_id, status, created_by
                 ) VALUES (
                     :id, :voucher_number, :branch_id, :posting_date, :reference_type,
-                    :description, :total_debit, :total_credit, :period_id, 'Posted'
+                    :description, :total_debit, :total_credit, :period_id, 'Posted', :created_by
                 )
             ";
 
@@ -208,7 +209,8 @@ class AccountingRepository
                 'description'    => $data['description'] ?? 'Manual Journal Voucher',
                 'total_debit'    => $totalDebit,
                 'total_credit'   => $totalCredit,
-                'period_id'      => $data['period_id'] ?? ('period_' . date('Ym')),
+                'period_id'      => $data['period_id'] ?? ('period_' . date('Y_m')),
+                'created_by'     => $created_by
             ]);
 
             $lineSql = "

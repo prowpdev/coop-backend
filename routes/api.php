@@ -94,6 +94,7 @@ $router->get('/api/share-capital/accounts/:id', [ShareCapitalController::class, 
 $router->post('/api/share-capital/payments', [ShareCapitalController::class, 'payment']);
 $router->post('/api/share-capital/pay', [ShareCapitalController::class, 'payment']);
 $router->delete('/api/share-capital/accounts/:id', [ShareCapitalController::class, 'destroy']);
+$router->put('/api/share-capital/accounts/:id', [ShareCapitalController::class, 'update']);
 
 // Accounting & General Ledger
 $router->get('/api/accounting/chart', [AccountingController::class, 'chart']);

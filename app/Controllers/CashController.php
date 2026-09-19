@@ -123,7 +123,9 @@ class CashController extends BaseController
             $this->error($e->getMessage(), 400);
         }
     }
-
+    /**
+     * POST /api/cash-accounts/transfer
+     */
     public function transfer(): never
     {
         $input = $this->getRequestBody();

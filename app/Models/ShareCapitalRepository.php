@@ -77,14 +77,35 @@ class ShareCapitalRepository
         $paidUpShares = (int)($data['paid_up_shares'] ?? 0);
         $paidUpAmount = (float)($data['paid_up_amount'] ?? ($paidUpShares * $parValue));
 
+        if ($paidUpShares > $subscribedShares) {
+            throw new \Exception("Paid-up shares cannot exceed subscribed shares.");
+        }
+
+        // 1. Duplicate check: ensure member does not already have an account
+        $checkStmt = $this->db->prepare("SELECT id, account_number FROM share_capital_accounts WHERE member_id = ? LIMIT 1");
+        $checkStmt->execute([$data['member_id']]);
+        $existing = $checkStmt->fetch(PDO::FETCH_ASSOC);
+        if ($existing) {
+            throw new \Exception("Member already has an active Share Capital account ({$existing['account_number']}). Duplicate accounts are prohibited.");
+        }
+
+        // 2. Resolve member branch
+        $branchId = $data['branch_id'] ?? null;
+        if (empty($branchId)) {
+            $mStmt = $this->db->prepare("SELECT branch_id FROM members WHERE id = ?");
+            $mStmt->execute([$data['member_id']]);
+            $mRow = $mStmt->fetch(PDO::FETCH_ASSOC);
+            $branchId = $mRow['branch_id'] ?? 'branch_tar';
+        }
+
         $this->db->beginTransaction();
 
         try {
             $sql = "INSERT INTO share_capital_accounts (
-                id, account_number, member_id, subscribed_shares, subscribed_amount,
+                id, account_number, member_id, branch_id, par_value, subscribed_shares, subscribed_amount,
                 paid_up_shares, paid_up_amount, status
             ) VALUES (
-                :id, :account_number, :member_id, :subscribed_shares, :subscribed_amount,
+                :id, :account_number, :member_id, :branch_id, :par_value, :subscribed_shares, :subscribed_amount,
                 :paid_up_shares, :paid_up_amount, :status
             )";
 
@@ -93,6 +114,8 @@ class ShareCapitalRepository
                 'id'                => $id,
                 'account_number'    => $accNo,
                 'member_id'         => $data['member_id'],
+                'branch_id'         => $branchId,
+                'par_value'         => $parValue,
                 'subscribed_shares' => $subscribedShares,
                 'subscribed_amount' => $subscribedAmount,
                 'paid_up_shares'    => $paidUpShares,
@@ -114,8 +137,7 @@ class ShareCapitalRepository
                     $data['member_id'],
                     $paidUpShares,
                     $paidUpAmount,
-                    $data['payment_date'] ?? date('Y-m-d'),
-                    $data['cash_account_id'] ?? null
+                    $data['payment_date'] ?? date('Y-m-d')
                 ]);
             }
 
@@ -206,6 +228,62 @@ class ShareCapitalRepository
         ");
         $stmt->execute([$accountId]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Update existing Share Capital account
+     */
+    public function updateAccount(string $id, array $data): array
+    {
+        $existing = $this->find($id);
+        if (!$existing) {
+            throw new \Exception("Share capital account not found.");
+        }
+
+        $parValue = (float)($data['par_value'] ?? $existing['par_value'] ?? 100);
+        $subscribedShares = isset($data['subscribed_shares']) ? (int)$data['subscribed_shares'] : (int)$existing['subscribed_shares'];
+        $subscribedAmount = isset($data['subscribed_amount']) ? (float)$data['subscribed_amount'] : ($subscribedShares * $parValue);
+
+        $paidUpShares = isset($data['paid_up_shares']) ? (int)$data['paid_up_shares'] : (int)$existing['paid_up_shares'];
+        $paidUpAmount = isset($data['paid_up_amount']) ? (float)$data['paid_up_amount'] : ($paidUpShares * $parValue);
+
+        if ($subscribedShares < 0 || $paidUpShares < 0) {
+            throw new \Exception("Shares cannot be negative.");
+        }
+
+        if ($paidUpShares > $subscribedShares) {
+            throw new \Exception("Paid-up shares ({$paidUpShares}) cannot exceed subscribed shares ({$subscribedShares}).");
+        }
+
+        $status = $data['status'] ?? $existing['status'];
+        $branchId = $data['branch_id'] ?? $existing['branch_id'] ?? null;
+        $accNo = !empty($data['account_number']) ? $data['account_number'] : $existing['account_number'];
+
+        $sql = "UPDATE share_capital_accounts SET
+            account_number = :account_number,
+            branch_id = :branch_id,
+            par_value = :par_value,
+            subscribed_shares = :subscribed_shares,
+            subscribed_amount = :subscribed_amount,
+            paid_up_shares = :paid_up_shares,
+            paid_up_amount = :paid_up_amount,
+            status = :status
+            WHERE id = :id";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'id'                => $id,
+            'account_number'    => $accNo,
+            'branch_id'         => $branchId,
+            'par_value'         => $parValue,
+            'subscribed_shares' => $subscribedShares,
+            'subscribed_amount' => $subscribedAmount,
+            'paid_up_shares'    => $paidUpShares,
+            'paid_up_amount'    => $paidUpAmount,
+            'status'            => $status,
+        ]);
+
+        return $this->find($id) ?? [];
     }
 
     /**
