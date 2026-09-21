@@ -364,19 +364,76 @@ public function saveFee(array $data): array
         ]);
         return array_merge(['id' => $id], $data);
     }
-
+    /**
+     * PUT /api/config/payment-allocation-rules/:id
+     */
     public function updatePaymentAllocationRule(string $id, array $data): array
     {
+        // The actual priority list is inside "data"
+        $priorityOrder = $data['priorities'] ?? [];
+
+        if (!is_array($priorityOrder)) {
+            throw new \InvalidArgumentException(
+                'priority_order data must be an array.'
+            );
+        }
+        // Normalize / validate the priority items
+        $priorityOrder = array_values(
+            array_map(
+                static function (array $item, int $index): array {
+                    return [
+                        'label' => (string) ($item['label'] ?? ''),
+                        'priority' => (int) ($item['priority'] ?? ($index + 1)),
+                        'component' => (string) ($item['component'] ?? ''),
+                    ];
+                },
+                $priorityOrder,
+                array_keys($priorityOrder)
+            )
+        );
+        usort(
+        $priorityOrder,
+        static function (array $a, array $b): int {
+            return $a['priority'] <=> $b['priority'];
+        }
+        );
         $stmt = $this->db->prepare("
             UPDATE payment_allocation_rules
-            SET priority_order = :priority_order
+            SET
+                priority_order = :priority_order,
+                updated_at = NOW()
             WHERE id = :id
         ");
+
         $stmt->execute([
-            'id'             => $id,
-            'priority_order' => (int)($data['priority_order'] ?? 1)
+            ':id' => $id,
+            ':priority_order' => json_encode(
+                $priorityOrder
+            ),
         ]);
-        return array_merge(['id' => $id], $data);
+    
+        if ($stmt->rowCount() === 0) {
+            // Check whether the ID actually exists
+            $check = $this->db->prepare("
+                SELECT id
+                FROM payment_allocation_rules
+                WHERE id = :id
+                LIMIT 1
+            ");
+
+            $check->execute([':id' => $id]);
+
+            if (!$check->fetch(PDO::FETCH_ASSOC)) {
+                throw new \RuntimeException(
+                    "Payment allocation rule '{$id}' not found."
+                );
+            }
+        }
+
+        return [
+            'id' => $id,
+            'priority_order' => $priorityOrder,
+        ];
     }
     /**
      * Fetch payment allocation rules for a specific allocation type

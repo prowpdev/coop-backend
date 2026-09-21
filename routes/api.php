@@ -143,6 +143,7 @@ $router->get('/api/dashboard/stats', [ReportController::class, 'dashboardStats']
 $router->post('/api/config/fees', [ConfigController::class, 'storeFee']);
 // Rules
 $router->get('/api/config/payment-allocation-rules/alloc_cda_std', [ConfigController::class, 'getAllocationRules']);
+$router->put('/api/config/payment-allocation-rules/:id', [ConfigController::class, 'updatePaymentAllocationRule']);
 $router->put('/api/config/approval-rules/', [ConfigController::class, 'updateApprovalRule']);
 
 // Database Seeders
