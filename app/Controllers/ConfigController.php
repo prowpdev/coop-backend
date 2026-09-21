@@ -244,6 +244,28 @@ class ConfigController extends BaseController
     }
 
     /**
+     * GET /api/config/fees/:id
+     */
+    public function fee(string $id): never
+    {
+        $fee = $this->config->getFee($id);
+        if (!$fee) {
+            $this->error('Fee not found.', 404);
+        }
+        $this->success($fee);
+    }
+
+     /**
+     * DELETE /api/config/fees/:id
+     */
+    public function destroyFee(string $id): never
+    {
+        $this->config->deleteFee($id);
+        $this->success(null, 'Fee deleted successfully.');
+    }
+
+
+    /**
      * GET /api/config/approval-workflows
      */
     public function approvalWorkflows(): never

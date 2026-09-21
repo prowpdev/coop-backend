@@ -92,6 +92,28 @@ class ConfigRepository
         $res->execute([$id]);
         return $res->fetch(PDO::FETCH_ASSOC) ?: [];
     }
+    
+    public function getFee(string $id): ?array
+    {
+        $stmt = $this->db->prepare("SELECT * FROM fees WHERE id = ?");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) return null;
+        return array_merge($row, [
+            'fixed_amount' => (float)($row['amount'] ?? 0),
+            'percentage' => (float)($row['percentage'] ?? ($row['calculation_type'] === 'Percentage' ? $row['amount'] : 0)),
+            'rate' => (float)($row['percentage'] ?? ($row['calculation_type'] === 'Percentage' ? $row['amount'] : 0)),
+            'applicable_module' => $row['applies_to'] ?? 'Loans',
+            'accounting_account_id' => $row['gl_account_id'] ?? null,
+            'active' => (bool)($row['active'] ?? true)
+        ]);
+    }
+
+    public function deleteFee(string $id): bool
+    {
+        $stmt = $this->db->prepare("DELETE FROM fees WHERE id = ?");
+        return $stmt->execute([$id]);
+    }
 
     public function getLoanProducts(): array
     {

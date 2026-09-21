@@ -62,7 +62,7 @@ class ShareCapitalRepository
         return $row ?: null;
     }
 
-    /**
+   /**
      * Open a new Share Capital / CBU subscription account
      */
     public function createAccount(array $data): array
@@ -76,7 +76,7 @@ class ShareCapitalRepository
 
         $paidUpShares = (int)($data['paid_up_shares'] ?? 0);
         $paidUpAmount = (float)($data['paid_up_amount'] ?? ($paidUpShares * $parValue));
-
+        
         if ($paidUpShares > $subscribedShares) {
             throw new \Exception("Paid-up shares cannot exceed subscribed shares.");
         }
@@ -102,10 +102,10 @@ class ShareCapitalRepository
 
         try {
             $sql = "INSERT INTO share_capital_accounts (
-                id, account_number, member_id, branch_id, par_value, subscribed_shares, subscribed_amount,
+                id, account_number, member_id, branch_id, subscribed_shares, subscribed_amount,
                 paid_up_shares, paid_up_amount, status
             ) VALUES (
-                :id, :account_number, :member_id, :branch_id, :par_value, :subscribed_shares, :subscribed_amount,
+                :id, :account_number, :member_id, :branch_id, :subscribed_shares, :subscribed_amount,
                 :paid_up_shares, :paid_up_amount, :status
             )";
 
@@ -115,7 +115,6 @@ class ShareCapitalRepository
                 'account_number'    => $accNo,
                 'member_id'         => $data['member_id'],
                 'branch_id'         => $branchId,
-                'par_value'         => $parValue,
                 'subscribed_shares' => $subscribedShares,
                 'subscribed_amount' => $subscribedAmount,
                 'paid_up_shares'    => $paidUpShares,
@@ -137,7 +136,8 @@ class ShareCapitalRepository
                     $data['member_id'],
                     $paidUpShares,
                     $paidUpAmount,
-                    $data['payment_date'] ?? date('Y-m-d')
+                    $data['payment_date'] ?? date('Y-m-d'),
+                    $data['cash_account_id'] ?? null
                 ]);
             }
 
@@ -262,7 +262,7 @@ class ShareCapitalRepository
         $sql = "UPDATE share_capital_accounts SET
             account_number = :account_number,
             branch_id = :branch_id,
-            par_value = :par_value,
+           
             subscribed_shares = :subscribed_shares,
             subscribed_amount = :subscribed_amount,
             paid_up_shares = :paid_up_shares,
@@ -275,7 +275,7 @@ class ShareCapitalRepository
             'id'                => $id,
             'account_number'    => $accNo,
             'branch_id'         => $branchId,
-            'par_value'         => $parValue,
+        
             'subscribed_shares' => $subscribedShares,
             'subscribed_amount' => $subscribedAmount,
             'paid_up_shares'    => $paidUpShares,
@@ -293,5 +293,88 @@ class ShareCapitalRepository
     {
         $stmt = $this->db->prepare('DELETE FROM share_capital_accounts WHERE id = ?');
         return $stmt->execute([$id]);
+    }
+
+    /**
+     * Get share capital settings
+     */
+    public function getSettings(): array
+    {
+        $stmt = $this->db->query("SELECT scs.*, coa.account_code, coa.name AS gl_account_name FROM share_capital_settings scs LEFT JOIN chart_of_accounts coa ON scs.accounting_account_id = coa.id");
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (empty($results)) {
+            // Return baseline default
+            return [[
+                'id' => 'sc_setting_01',
+                'cooperative_id' => 'coop_01',
+                'par_value_per_share' => 100.00,
+                'min_subscription_shares' => 100,
+                'min_paid_up_shares' => 25,
+                'max_share_holding_percentage' => 10.00,
+                'transfer_fee' => 100.00,
+                'withdrawal_rule' => 'Subject to Board approval and 30-day prior written notice',
+                'accounting_account_id' => 'acc_3110'
+            ]];
+        }
+        return $results;
+    }
+
+    /**
+     * Create share capital setting
+     */
+    public function createSetting(array $data): array
+    {
+        $id = $data['id'] ?? ('sc_setting_' . substr(uniqid(), -6));
+        $stmt = $this->db->prepare("
+            INSERT INTO share_capital_settings (id, cooperative_id, par_value_per_share, min_subscription_shares, min_paid_up_shares, max_share_holding_percentage, transfer_fee, withdrawal_rule, accounting_account_id)
+            VALUES (:id, :cooperative_id, :par_value_per_share, :min_subscription_shares, :min_paid_up_shares, :max_share_holding_percentage, :transfer_fee, :withdrawal_rule, :accounting_account_id)
+        ");
+        $stmt->execute([
+            'id' => $id,
+            'cooperative_id' => $data['cooperative_id'] ?? 'coop_01',
+            'par_value_per_share' => (float)($data['par_value_per_share'] ?? 100.0),
+            'min_subscription_shares' => (int)($data['min_subscription_shares'] ?? 100),
+            'min_paid_up_shares' => (int)($data['min_paid_up_shares'] ?? 25),
+            'max_share_holding_percentage' => (float)($data['max_share_holding_percentage'] ?? 10.0),
+            'transfer_fee' => (float)($data['transfer_fee'] ?? 100.0),
+            'withdrawal_rule' => $data['withdrawal_rule'] ?? 'Subject to Board approval and 30-day prior written notice',
+            'accounting_account_id' => $data['accounting_account_id'] ?? 'acc_3110'
+        ]);
+
+        $fetch = $this->db->prepare("SELECT * FROM share_capital_settings WHERE id = ?");
+        $fetch->execute([$id]);
+        return $fetch->fetch(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Update share capital setting
+     */
+    public function updateSetting(string $id, array $data): array
+    {
+        $stmt = $this->db->prepare("
+            UPDATE share_capital_settings
+            SET par_value_per_share = :par_value_per_share,
+                min_subscription_shares = :min_subscription_shares,
+                min_paid_up_shares = :min_paid_up_shares,
+                max_share_holding_percentage = :max_share_holding_percentage,
+                transfer_fee = :transfer_fee,
+                withdrawal_rule = :withdrawal_rule,
+                accounting_account_id = :accounting_account_id
+            WHERE id = :id
+        ");
+        $stmt->execute([
+            'id' => $id,
+            'par_value_per_share' => (float)($data['par_value_per_share'] ?? 100.0),
+            'min_subscription_shares' => (int)($data['min_subscription_shares'] ?? 100),
+            'min_paid_up_shares' => (int)($data['min_paid_up_shares'] ?? 25),
+            'max_share_holding_percentage' => (float)($data['max_share_holding_percentage'] ?? 10.0),
+            'transfer_fee' => (float)($data['transfer_fee'] ?? 100.0),
+            'withdrawal_rule' => $data['withdrawal_rule'] ?? 'Subject to Board approval and 30-day prior written notice',
+            'accounting_account_id' => $data['accounting_account_id'] ?? 'acc_3110'
+        ]);
+
+        $fetch = $this->db->prepare("SELECT * FROM share_capital_settings WHERE id = ?");
+        $fetch->execute([$id]);
+        return $fetch->fetch(PDO::FETCH_ASSOC) ?: [];
     }
 }

@@ -387,34 +387,114 @@ public function getFinancialStatements(
 }
   
 
-    /**
-     * Dashboard operational & portfolio statistics
-     */
-    public function getDashboardStats(): array
-    {
-        $membersCount = (int)$this->db->query("SELECT COUNT(*) FROM members WHERE status = 'Active'")->fetchColumn();
-        $totalMembers = (int)$this->db->query("SELECT COUNT(*) FROM members")->fetchColumn();
 
-        $loansActive = (int)$this->db->query("SELECT COUNT(*) FROM loans WHERE status = 'Active'")->fetchColumn();
-        $loanPortfolio = (float)$this->db->query("SELECT COALESCE(SUM(current_balance), 0) FROM loans WHERE status = 'Active'")->fetchColumn();
 
-        $savingsTotal = (float)$this->db->query("SELECT COALESCE(SUM(balance), 0) FROM savings_accounts WHERE status = 'Active'")->fetchColumn();
-        $savingsAccounts = (int)$this->db->query("SELECT COUNT(*) FROM savings_accounts WHERE status = 'Active'")->fetchColumn();
+/**
+ * Dashboard operational & portfolio statistics
+ * Matches the TypeScript /dashboard/stats response.
+ */
+public function getDashboardStats(): array
+{
+    // Get branch filter from query string
+    $branchId = $_GET['branch_id'] ?? 'all';
 
-        $shareCapitalTotal = (float)$this->db->query("SELECT COALESCE(SUM(paid_up_amount), 0) FROM share_capital_accounts WHERE status = 'Active'")->fetchColumn();
+    // Normalize the branch ID
+    $branchId = is_string($branchId) ? trim($branchId) : 'all';
 
-        $cashVaultTotal = (float)$this->db->query("SELECT COALESCE(SUM(current_balance), 0) FROM cash_accounts")->fetchColumn();
+    // Build the branch filter
+    $branchFilter = '';
+    $params = [];
 
-        return [
-            'active_members'        => $membersCount,
-            'total_members'         => $totalMembers,
-            'active_loans_count'    => $loansActive,
-            'loan_portfolio_total'  => round($loanPortfolio, 2),
-            'savings_total'         => round($savingsTotal, 2),
-            'savings_accounts_count'=> $savingsAccounts,
-            'share_capital_total'   => round($shareCapitalTotal, 2),
-            'cash_liquidity_total'  => round($cashVaultTotal, 2),
-            'system_status'         => 'Healthy - Real-time Connected'
-        ];
+    if ($branchId !== 'all' && $branchId !== '') {
+        $branchFilter = ' AND branch_id = :branch_id';
+        $params[':branch_id'] = $branchId;
     }
+
+    // Helper function for executing aggregate queries
+    $query = function (string $sql) use ($branchFilter, $params) {
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchColumn();
+    };
+
+    // Members
+    $totalMembers = (int)$query(
+        "SELECT COUNT(*) FROM members
+         WHERE 1=1 $branchFilter"
+    );
+
+    // Loans
+    $loansActive = (int)$query(
+        "SELECT COUNT(*) FROM loans
+         WHERE status = 'Active' $branchFilter"
+    );
+
+    $loanPortfolio = (float)$query(
+        "SELECT COALESCE(SUM(current_balance), 0)
+         FROM loans
+         WHERE status = 'Active' $branchFilter"
+    );
+
+    // Savings
+    $savingsTotal = (float)$query(
+        "SELECT COALESCE(SUM(balance), 0)
+         FROM savings_accounts
+         WHERE 1=1 $branchFilter"
+    );
+
+    // Share Capital
+    // Filter by branch through the member's branch_id,
+    // matching the TypeScript implementation.
+    if ($branchId !== 'all' && $branchId !== '') {
+        $shareCapitalParams = [':branch_id' => $branchId];
+
+        $stmt = $this->db->prepare(
+            "SELECT COALESCE(SUM(sc.paid_up_amount), 0)
+             FROM share_capital_accounts sc
+             INNER JOIN members m ON m.id = sc.member_id
+             WHERE m.branch_id = :branch_id"
+        );
+
+        $stmt->execute($shareCapitalParams);
+        $shareCapitalTotal = (float)$stmt->fetchColumn();
+    } else {
+        $shareCapitalTotal = (float)$query(
+            "SELECT COALESCE(SUM(paid_up_amount), 0)
+             FROM share_capital_accounts
+             WHERE 1=1"
+        );
+    }
+
+    // Cash and Bank Accounts
+    $cashVaultTotal = (float)$query(
+        "SELECT COALESCE(SUM(current_balance), 0)
+         FROM cash_accounts
+         WHERE 1=1 $branchFilter"
+    );
+
+    // Total interest collected from all loans
+    // (Not limited to active loans, matching TypeScript.)
+    $interestIncomeEarned = (float)$query(
+        "SELECT COALESCE(SUM(total_interest_paid), 0)
+         FROM loans
+         WHERE 1=1 $branchFilter"
+    );
+
+    // Total journal vouchers
+    $totalJournalVouchers = (int)$query(
+        "SELECT COUNT(*) FROM journal_entries
+         WHERE 1=1 $branchFilter"
+    );
+
+    return [
+        'total_members'           => $totalMembers,
+        'active_loans_count'      => $loansActive,
+        'outstanding_portfolio'   => round($loanPortfolio, 2),
+        'total_savings_deposits'  => round($savingsTotal, 2),
+        'total_share_capital'     => round($shareCapitalTotal, 2),
+        'total_cash_and_bank'     => round($cashVaultTotal, 2),
+        'total_interest_collected'=> round($interestIncomeEarned, 2),
+        'total_journal_vouchers'  => $totalJournalVouchers,
+    ];
+}
 }

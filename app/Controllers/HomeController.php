@@ -6,19 +6,14 @@ namespace App\Controllers;
 
 use PDO;
 
+
 class HomeController extends BaseController
 {
-    public function __construct(
-        PDO $db
-    ) {
+
+    public function __construct(PDO $db) {
         parent::__construct($db);
+       
     }
-
-    public function test(): never
-    {
-        $this->json(['success']);
-    }
-
     public function index(): never
     {
         $this->json([
@@ -30,4 +25,6 @@ class HomeController extends BaseController
             'timestamp'  => date('c')
         ]);
     }
+    
+ 
 }

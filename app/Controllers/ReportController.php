@@ -48,5 +48,6 @@ class ReportController extends BaseController
     {
         $stats = $this->reports->getDashboardStats();
         $this->success($stats);
+
     }
 }

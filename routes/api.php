@@ -14,6 +14,7 @@ use App\Controllers\CashController;
 use App\Controllers\ReportController;
 use App\Controllers\UserController;
 use App\Controllers\SystemController;
+use App\Controllers\SeederController;
 use PSpell\Config;
 
 /** @var Router $router */
@@ -34,6 +35,8 @@ $router->get('/api/test', [HomeController::class, 'test']);
 
 // System Configuration
 $router->get('/api/system/setup/status', [SystemController::class, 'status']);
+// Verification test
+$router->post('/api/system/run-verification-tests', [SystemController::class, 'runVerificationTests']);
 
 // Configuration Center
 $router->get('/api/config/all', [ConfigController::class, 'all']);
@@ -52,6 +55,7 @@ $router->delete('/api/config/loan-products/:id', [ConfigController::class, 'dest
 
 $router->get('/api/savings-products', [ConfigController::class, 'savingsProducts']);
 $router->get('/api/config/savings-products', [ConfigController::class, 'savingsProducts']);
+$router->post('/api/config/savings-products', [ConfigController::class, 'savingsProducts']);
 $router->get('/api/feature-toggles', [ConfigController::class, 'featureToggles']);
 $router->post('/api/feature-toggles', [ConfigController::class, 'updateToggle']);
 $router->get('/api/system-settings', [ConfigController::class, 'systemSettings']);
@@ -95,6 +99,10 @@ $router->post('/api/share-capital/payments', [ShareCapitalController::class, 'pa
 $router->post('/api/share-capital/pay', [ShareCapitalController::class, 'payment']);
 $router->delete('/api/share-capital/accounts/:id', [ShareCapitalController::class, 'destroy']);
 $router->put('/api/share-capital/accounts/:id', [ShareCapitalController::class, 'update']);
+// Share Capital
+$router->get('/api/share-capital/settings', [ShareCapitalController::class, 'getSettings']);
+$router->post('/api/share-capital/settings', [ShareCapitalController::class, 'storeSetting']);
+$router->put('/api/share-capital/settings/:id', [ShareCapitalController::class, 'updateSetting']);
 
 // Accounting & General Ledger
 $router->get('/api/accounting/chart', [AccountingController::class, 'chart']);
@@ -136,4 +144,9 @@ $router->post('/api/config/fees', [ConfigController::class, 'storeFee']);
 // Rules
 $router->get('/api/config/payment-allocation-rules/alloc_cda_std', [ConfigController::class, 'getAllocationRules']);
 $router->put('/api/config/approval-rules/', [ConfigController::class, 'updateApprovalRule']);
+
+// Database Seeders
+$router->get('/api/database/seeder', [SeederController::class, 'run']);
+$router->get('/api/database/seeder/reset', [SeederController::class, 'reset']);
+
 

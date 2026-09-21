@@ -41,6 +41,122 @@ class CashRepository
         return $row ?: null;
     }
 
+    private ?array $cashTxColumns = null;
+
+    private function getCashTxColumns(): array
+    {
+        if ($this->cashTxColumns !== null) {
+            return $this->cashTxColumns;
+        }
+
+        try {
+            $stmt = $this->db->query("SHOW COLUMNS FROM cash_transactions");
+            $cols = [];
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $cols[strtolower($row['Field'])] = true;
+            }
+            $this->cashTxColumns = $cols;
+            return $cols;
+        } catch (\Throwable $e) {
+            // Default to cooperative_db.sql standard schema
+            return [
+                'id' => true,
+                'transaction_no' => true,
+                'cash_account_id' => true,
+                'type' => true,
+                'amount' => true,
+                'balance_before' => true,
+                'balance_after' => true,
+                'reference_type' => true,
+                'reference_id' => true,
+                'description' => true,
+                'created_by' => true,
+                'created_at' => true,
+            ];
+        }
+    }
+
+    public function recordCashTransaction(
+        string $accountId,
+        string $actionType,
+        float $amount,
+        float $balanceBefore,
+        float $balanceAfter,
+        string $reference,
+        string $date,
+        string $notes,
+        string $createdBy = 'System'
+    ): void {
+        $cols = $this->getCashTxColumns();
+        $data = [];
+
+        if (isset($cols['id'])) {
+            $data['id'] = 'ctx_' . bin2hex(random_bytes(6));
+        }
+        if (isset($cols['cash_account_id'])) {
+            $data['cash_account_id'] = $accountId;
+        }
+        if (isset($cols['transaction_no'])) {
+            $data['transaction_no'] = $reference . '-' . mt_rand(10, 99);
+        }
+        if (isset($cols['reference_number'])) {
+            $data['reference_number'] = $reference;
+        }
+        if (isset($cols['type'])) {
+            $upper = strtoupper($actionType);
+            if (str_contains($upper, 'OUT') || str_contains($upper, 'WITHDRAW')) {
+                $data['type'] = 'OUTFLOW';
+            } elseif (str_contains($upper, 'IN') || str_contains($upper, 'REPLENISH') || str_contains($upper, 'DEPOSIT')) {
+                $data['type'] = 'INFLOW';
+            } elseif (str_contains($upper, 'TRANSFER')) {
+                $data['type'] = 'TRANSFER';
+            } else {
+                $data['type'] = $actionType;
+            }
+        }
+        if (isset($cols['amount'])) {
+            $data['amount'] = $amount;
+        }
+        if (isset($cols['balance_before'])) {
+            $data['balance_before'] = $balanceBefore;
+        }
+        if (isset($cols['balance_after'])) {
+            $data['balance_after'] = $balanceAfter;
+        }
+        // ONLY insert running_balance if the column actually exists in the database table
+        if (isset($cols['running_balance'])) {
+            $data['running_balance'] = $balanceAfter;
+        }
+        if (isset($cols['reference_type'])) {
+            $data['reference_type'] = str_contains(strtoupper($actionType), 'TRANSFER') ? 'TRANSFER' : 'REPLENISHMENT';
+        }
+        if (isset($cols['reference_id'])) {
+            $data['reference_id'] = $reference;
+        }
+        if (isset($cols['description'])) {
+            $data['description'] = $notes;
+        }
+        if (isset($cols['notes'])) {
+            $data['notes'] = $notes;
+        }
+        if (isset($cols['transaction_date'])) {
+            $data['transaction_date'] = $date;
+        }
+        if (isset($cols['created_by'])) {
+            $data['created_by'] = $createdBy;
+        }
+
+        if (empty($data)) {
+            return;
+        }
+
+        $fields = array_keys($data);
+        $placeholders = array_fill(0, count($fields), '?');
+        $sql = "INSERT INTO cash_transactions (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(array_values($data));
+    }
+
     public function transfer(string $fromId, string $toId, float $amount, string $date, string $notes): array
     {
         if ($amount <= 0) {
@@ -51,7 +167,7 @@ class CashRepository
 
         try {
             // Deduct from source
-            $fromStmt = $this->db->prepare("SELECT current_balance FROM cash_accounts WHERE id = ? FOR UPDATE");
+            $fromStmt = $this->db->prepare("SELECT * FROM cash_accounts WHERE id = ? FOR UPDATE");
             $fromStmt->execute([$fromId]);
             $from = $fromStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -59,15 +175,16 @@ class CashRepository
                 throw new \RuntimeException('Source cash account not found.');
             }
 
-            if ((float)$from['current_balance'] < $amount) {
+            $fromBalBefore = (float)$from['current_balance'];
+            if ($fromBalBefore < $amount) {
                 throw new \RuntimeException('Insufficient cash drawer balance.');
             }
 
-            $newFromBal = (float)$from['current_balance'] - $amount;
+            $newFromBal = $fromBalBefore - $amount;
             $this->db->prepare("UPDATE cash_accounts SET current_balance = ? WHERE id = ?")->execute([$newFromBal, $fromId]);
 
             // Add to target
-            $toStmt = $this->db->prepare("SELECT current_balance FROM cash_accounts WHERE id = ? FOR UPDATE");
+            $toStmt = $this->db->prepare("SELECT * FROM cash_accounts WHERE id = ? FOR UPDATE");
             $toStmt->execute([$toId]);
             $to = $toStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -75,19 +192,15 @@ class CashRepository
                 throw new \RuntimeException('Destination cash account not found.');
             }
 
-            $newToBal = (float)$to['current_balance'] + $amount;
+            $toBalBefore = (float)$to['current_balance'];
+            $newToBal = $toBalBefore + $amount;
             $this->db->prepare("UPDATE cash_accounts SET current_balance = ? WHERE id = ?")->execute([$newToBal, $toId]);
 
-            // Log transactions
+            // Log transactions safely without assuming non-existent columns
             $ref = 'TXFR-' . date('Ymd') . '-' . mt_rand(100, 999);
 
-            $insTx = $this->db->prepare("
-                INSERT INTO cash_transactions (id, cash_account_id, type, amount, running_balance, reference_number, transaction_date, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-
-            $insTx->execute(['ctx_' . bin2hex(random_bytes(6)), $fromId, 'Transfer Out', $amount, $newFromBal, $ref, $date, $notes]);
-            $insTx->execute(['ctx_' . bin2hex(random_bytes(6)), $toId, 'Transfer In', $amount, $newToBal, $ref, $date, $notes]);
+            $this->recordCashTransaction($fromId, 'Transfer Out', $amount, $fromBalBefore, $newFromBal, $ref, $date, $notes);
+            $this->recordCashTransaction($toId, 'Transfer In', $amount, $toBalBefore, $newToBal, $ref, $date, $notes);
 
             $this->db->commit();
 
@@ -102,7 +215,7 @@ class CashRepository
             throw $e;
         }
     }
-    
+
     public function save(array $data): array
     {
         $id = $data['id'] ?? ('cash_' . bin2hex(random_bytes(6)));
@@ -191,20 +304,37 @@ class CashRepository
                 }
 
                 if ($source) {
-                    $newSourceBal = (float)$source['current_balance'] - $amount;
+                    $sourceBalBefore = (float)$source['current_balance'];
+                    $newSourceBal = $sourceBalBefore - $amount;
                     $this->db->prepare("UPDATE cash_accounts SET current_balance = ? WHERE id = ?")->execute([$newSourceBal, $sourceId]);
+                    $this->recordCashTransaction(
+                        $sourceId,
+                        'Transfer Out',
+                        $amount,
+                        $sourceBalBefore,
+                        $newSourceBal,
+                        'REP-OUT-' . date('Ymd') . '-' . mt_rand(100, 999),
+                        $date,
+                        "Replenishment outflow to " . ($target['name'] ?? 'cash account')
+                    );
                 }
             }
 
-            $newTargetBal = (float)$target['current_balance'] + $amount;
+            $targetBalBefore = (float)$target['current_balance'];
+            $newTargetBal = $targetBalBefore + $amount;
             $this->db->prepare("UPDATE cash_accounts SET current_balance = ? WHERE id = ?")->execute([$newTargetBal, $accountId]);
 
             $ref = 'REP-' . date('Ymd') . '-' . mt_rand(100, 999);
-            $txStmt = $this->db->prepare("
-                INSERT INTO cash_transactions (id, cash_account_id, type, amount, running_balance, reference_number, transaction_date, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            $txStmt->execute(['ctx_' . bin2hex(random_bytes(6)), $accountId, 'Replenishment', $amount, $newTargetBal, $ref, $date, $notes]);
+            $this->recordCashTransaction(
+                $accountId,
+                'Replenishment',
+                $amount,
+                $targetBalBefore,
+                $newTargetBal,
+                $ref,
+                $date,
+                $notes
+            );
 
             $this->db->commit();
 

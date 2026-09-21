@@ -204,12 +204,12 @@ class MemberRepository
         // Journal Vouchers (Manual and System JVs for this member)
         $jvStmt = $this->db->prepare("
             SELECT DISTINCT je.id, je.voucher_number, je.posting_date, je.description, je.reference_type,
-                   je.total_debit, je.total_credit, je.status, je.created_by
+                je.total_debit, je.total_credit, je.status, je.created_by
             FROM journal_entries je
             LEFT JOIN journal_lines jl ON je.id = jl.journal_entry_id
             WHERE je.reference_id = ?
-               OR jl.subsidiary_id = ?
-               OR je.description LIKE ?
+            OR jl.subsidiary_id = ?
+            OR je.description LIKE ?
             ORDER BY je.posting_date DESC
         ");
         $memberName = '%' . ($member['first_name'] ?? '') . '%';
@@ -300,8 +300,8 @@ class MemberRepository
                 FROM journal_entries je
                 LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
                 WHERE je.reference_id = :journal_reference_id
-                   OR jl.subsidiary_id = :journal_subsidiary_id
-                   OR je.description LIKE :journal_member_name
+                OR jl.subsidiary_id = :journal_subsidiary_id
+                OR je.description LIKE :journal_member_name
             ) AS member_transactions
             ORDER BY transaction_date DESC, created_at DESC
         ");
@@ -333,63 +333,64 @@ class MemberRepository
             'transactions'      => $transactions
         ];
     }
+    
     /**
- * Generate a financial summary for a member.
- *
- * @param array $loans
- * @param array $savings
- * @param array $shareCapital
- * @param array $transactions
- * @param array $journalVouchers
- * @return array
- */
-private function generateMemberSummary(
-    array $loans,
-    array $savings,
-    array $shareCapital,
-    array $transactions,
-    array $journalVouchers
-): array {
-    // Total outstanding loan balance
-    $loanBalance = array_reduce(
-        $loans,
-        fn(float $sum, array $loan): float =>
-            $sum + (float) ($loan['current_balance'] ?? 0),
-        0.0
-    );
+     * Generate a financial summary for a member.
+     *
+     * @param array $loans
+     * @param array $savings
+     * @param array $shareCapital
+     * @param array $transactions
+     * @param array $journalVouchers
+     * @return array
+     */
+    private function generateMemberSummary(
+        array $loans,
+        array $savings,
+        array $shareCapital,
+        array $transactions,
+        array $journalVouchers
+    ): array {
+        // Total outstanding loan balance
+        $loanBalance = array_reduce(
+            $loans,
+            fn(float $sum, array $loan): float =>
+                $sum + (float) ($loan['current_balance'] ?? 0),
+            0.0
+        );
 
-    // Total savings balance
-    $savingsBalance = array_reduce(
-        $savings,
-        fn(float $sum, array $account): float =>
-            $sum + (float) ($account['balance'] ?? 0),
-        0.0
-    );
+        // Total savings balance
+        $savingsBalance = array_reduce(
+            $savings,
+            fn(float $sum, array $account): float =>
+                $sum + (float) ($account['balance'] ?? 0),
+            0.0
+        );
 
-    // Total paid-up share capital
-    $shareCapitalTotal = array_reduce(
-        $shareCapital,
-        fn(float $sum, array $account): float =>
-            $sum + (float) ($account['paid_up_amount'] ?? 0),
-        0.0
-    );
+        // Total paid-up share capital
+        $shareCapitalTotal = array_reduce(
+            $shareCapital,
+            fn(float $sum, array $account): float =>
+                $sum + (float) ($account['paid_up_amount'] ?? 0),
+            0.0
+        );
 
-    // Membership fees
-    // Replace this with the actual membership fee calculation
-    $membershipFees = 0.0;
+        // Membership fees
+        // Replace this with the actual membership fee calculation
+        $membershipFees = 0.0;
 
-    return [
-        'loan_balance' => round($loanBalance, 2),
+        return [
+            'loan_balance' => round($loanBalance, 2),
 
-        'savings_balance' => round($savingsBalance, 2),
+            'savings_balance' => round($savingsBalance, 2),
 
-        'share_capital' => round($shareCapitalTotal, 2),
+            'share_capital' => round($shareCapitalTotal, 2),
 
-        'membership_fees' => round($membershipFees, 2),
+            'membership_fees' => round($membershipFees, 2),
 
-        'total_transactions' => count($transactions),
+            'total_transactions' => count($transactions),
 
-        'jv_count' => count($journalVouchers),
-    ];
-}
+            'jv_count' => count($journalVouchers),
+        ];
+    }
 }
