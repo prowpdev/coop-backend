@@ -30,6 +30,14 @@ class DatabaseResetter
          * actual foreign-key schema.
          */
         $tables = [
+          'savings_transactions',
+          'savings_accounts',
+          'journal_entries',
+          'share_capital_transactions',
+          'share_capital_accounts',
+          'share_capital_settings',
+          'cash_transactions',
+
           'chart_of_accounts',
           'accounting_mappings',
           'accounting_periods',
@@ -55,6 +63,8 @@ class DatabaseResetter
           'transaction_types',
           'user_roles',
           'users',
+
+
         ];
 
         $deleted = [];

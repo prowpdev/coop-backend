@@ -8,9 +8,7 @@ use PDO;
 
 class SavingsRepository
 {
-    public function __construct(private PDO $db)
-    {
-    }
+    public function __construct(private PDO $db) {}
 
     /**
      * Get savings accounts with member and product info
@@ -241,73 +239,272 @@ class SavingsRepository
     /**
      * Record deposit or withdrawal
      */
+    /**
+     * Record savings deposit or withdrawal.
+     *
+     * Deposit:
+     *   Member Savings +amount
+     *   Cash/Bank +amount
+     *
+     * Withdrawal:
+     *   Member Savings -amount
+     *   Cash/Bank -amount
+     */
     public function recordTransaction(array $data): array
     {
-        $accountId = $data['savings_account_id'];
-        $memberId = $data['member_id'];
-        $type      = $data['transaction_type']; // 'Deposit' or 'Withdrawal'
-        $amount    = (float)$data['amount'];
-        $date      = $data['transaction_date'] ?? date('Y-m-d');
-        $ref       = $data['reference_number'] ?? ('TX-' . date('Ymd') . '-' . mt_rand(1000, 9999));
+        $accountId = $data['savings_account_id'] ?? null;
+        $memberId  = $data['member_id'] ?? null;
+        $cashAccountId = $data['cash_account_id'] ?? null;
 
-        if ($amount <= 0) {
-            throw new \InvalidArgumentException('Transaction amount must be positive.');
+        // Normalize transaction type
+        $type = strtoupper(
+            trim((string)($data['transaction_type'] ?? $data['type'] ?? ''))
+        );
+
+        // Support both "DEPOSIT" and "Deposit"
+        if ($type === 'DEPOSIT') {
+            $type = 'DEPOSIT';
+        } elseif (
+            $type === 'WITHDRAWAL' ||
+            $type === 'WITHDRAW' ||
+            $type === 'WITHDRAWING'
+        ) {
+            $type = 'WITHDRAWAL';
+        } else {
+            throw new \InvalidArgumentException(
+                'Transaction type must be DEPOSIT or WITHDRAWAL.'
+            );
         }
 
+        $amount = (float)($data['amount'] ?? 0);
+
+        $date = $data['transaction_date']
+            ?? date('Y-m-d');
+
+        $ref = $data['reference_number']
+            ?? $data['transaction_no']
+            ?? ('TX-' . date('YmdHis') . '-' . strtoupper(bin2hex(random_bytes(3))));
+
+        $notes = $data['notes']
+            ?? ($type === 'DEPOSIT'
+                ? 'Savings deposit'
+                : 'Savings withdrawal');
+
+        $createdBy = $data['created_by'] ?? null;
+
+        /*
+     * Basic validation
+     */
+        if (!$accountId) {
+            throw new \InvalidArgumentException(
+                'Savings account ID is required.'
+            );
+        }
+
+        if (!$cashAccountId) {
+            throw new \InvalidArgumentException(
+                'Cash account ID is required.'
+            );
+        }
+
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException(
+                'Transaction amount must be greater than zero.'
+            );
+        }
+
+        /*
+     * Start database transaction.
+     *
+     * Savings balance and cash balance must always
+     * succeed or fail together.
+     */
         $this->db->beginTransaction();
 
         try {
-            // Lock and fetch current balance
-            $stmt = $this->db->prepare("SELECT balance FROM savings_accounts WHERE id = ? FOR UPDATE");
-            $stmt->execute([$accountId]);
-            $acc = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if (!$acc) {
-                throw new \RuntimeException('Savings account not found.');
+            /*
+         * 1. Lock the savings account.
+         *
+         * FOR UPDATE prevents two simultaneous transactions
+         * from modifying the same savings balance incorrectly.
+         */
+            $stmt = $this->db->prepare("
+            SELECT
+                id,
+                member_id,
+                balance
+            FROM savings_accounts
+            WHERE id = ?
+            FOR UPDATE
+        ");
+
+            $stmt->execute([
+                $accountId
+            ]);
+
+            $account = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$account) {
+                throw new \RuntimeException(
+                    "Savings account '{$accountId}' not found."
+                );
             }
 
-            $currentBal = (float)$acc['balance'];
+            /*
+         * Use the member_id from the savings account when available.
+         *
+         * This prevents accidentally recording a transaction
+         * against a different member.
+         */
+            $actualMemberId = $account['member_id'] ?? $memberId;
 
-            if ($type === 'Withdrawal' && $currentBal < $amount) {
-                throw new \RuntimeException('Insufficient savings balance for withdrawal.');
+            /*
+         * 2. Get current savings balance.
+         */
+            $currentBalance = (float)$account['balance'];
+
+            /*
+         * 3. Validate withdrawal.
+         */
+            if ($type === 'WITHDRAWAL' && $currentBalance < $amount) {
+                throw new \RuntimeException(
+                    sprintf(
+                        'Insufficient savings balance. Available: %.2f, Requested: %.2f',
+                        $currentBalance,
+                        $amount
+                    )
+                );
             }
 
-            $newBal = ($type === 'Deposit') ? ($currentBal + $amount) : ($currentBal - $amount);
+            /*
+         * 4. Calculate new savings balance.
+         */
+            if ($type === 'DEPOSIT') {
+                $newBalance = $currentBalance + $amount;
+            } else {
+                $newBalance = $currentBalance - $amount;
+            }
 
-            // Update account balance
-            $updStmt = $this->db->prepare("UPDATE savings_accounts SET balance = ? WHERE id = ?");
-            $updStmt->execute([$newBal, $accountId]);
+            /*
+         * Avoid floating point noise.
+         */
+            $newBalance = round($newBalance, 2);
 
-            // Insert transaction line safely
+            /*
+         * 5. Update savings account balance.
+         */
+            $stmt = $this->db->prepare("
+            UPDATE savings_accounts
+            SET balance = ?
+            WHERE id = ?
+        ");
+
+            $stmt->execute([
+                $newBalance,
+                $accountId
+            ]);
+
+            /*
+         * 6. Generate savings transaction ID.
+         */
             $txId = 'stx_' . bin2hex(random_bytes(6));
+
+            /*
+         * 7. Record the member savings transaction.
+         *
+         * This writes to savings_transactions.
+         */
             $this->recordSavingsTransaction(
                 $txId,
                 $accountId,
-                $acc['member_id'] ?? $memberId,
+                $actualMemberId,
                 $type,
                 $amount,
-                $newBal,
+                $newBalance,
                 $ref,
                 $date,
-                $data['notes'] ?? "$type transaction"
+                $notes,
+                $cashAccountId
             );
 
+            /*
+         * 8. Update the physical cash/bank account.
+         *
+         * Deposit:
+         *   Cash IN
+         *
+         * Withdrawal:
+         *   Cash OUT
+         */
+            $cashType = ($type === 'DEPOSIT')
+                ? 'INFLOW'
+                : 'OUTFLOW';
+
+            $this->saveTransactionToCashAccount(
+                cashAccountId: $cashAccountId,
+                type: $cashType,
+                amount: $amount,
+                transactionNo: $ref,
+                referenceNumber: $ref,
+                referenceType: 'savings_transaction',
+                referenceId: $txId,
+                description: $type === 'DEPOSIT'
+                    ? 'Savings deposit'
+                    : 'Savings withdrawal',
+                notes: $notes,
+                transactionDate: $date,
+                createdBy: $createdBy
+            );
+
+            /*
+         * 9. Everything succeeded.
+         */
             $this->db->commit();
 
+            /*
+         * 10. Return useful transaction information.
+         */
             return [
-                'transaction_id'  => $txId,
-                'account_number'  => $accountId,
-                'type'            => $type,
-                'amount'          => $amount,
-                'running_balance' => $newBal,
-                'reference_no'    => $ref
+                'success' => true,
+
+                'transaction_id' => $txId,
+
+                'savings_account_id' => $accountId,
+
+                'member_id' => $actualMemberId,
+
+                'cash_account_id' => $cashAccountId,
+
+                'type' => $type,
+
+                'amount' => $amount,
+
+                'previous_balance' => $currentBalance,
+
+                'running_balance' => $newBalance,
+
+                'reference_number' => $ref,
+
+                'transaction_date' => $date
             ];
-        } catch (\Exception $e) {
-            $this->db->rollBack();
+        } catch (\Throwable $e) {
+
+            /*
+         * If anything fails, undo:
+         *
+         * - savings balance update
+         * - savings transaction
+         * - cash transaction
+         * - cash balance update
+         */
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
             throw $e;
         }
     }
-
     /**
      * Delete account
      */
@@ -315,5 +512,130 @@ class SavingsRepository
     {
         $stmt = $this->db->prepare('DELETE FROM savings_accounts WHERE id = ?');
         return $stmt->execute([$id]);
+    }
+
+    /**
+     * Update cash/bank subsidiary ledger.
+     *
+     * For an Asset account:
+     *
+     * Deposit    → Debit  → increase
+     * Withdrawal → Credit → decrease
+     */
+    private function saveTransactionToCashAccount(
+        string $cashAccountId,
+        string $type,
+        float $amount,
+        string $transactionNo,
+        ?string $referenceNumber = null,
+        ?string $referenceType = null,
+        ?string $referenceId = null,
+        ?string $description = null,
+        ?string $notes = null,
+        ?string $transactionDate = null,
+        ?string $createdBy = null
+    ): void {
+        $type = strtoupper(trim($type));
+
+        if (!in_array($type, ['INFLOW', 'OUTFLOW'], true)) {
+            throw new \InvalidArgumentException(
+                'Cash transaction type must be INFLOW or OUTFLOW.'
+            );
+        }
+
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException(
+                'Cash transaction amount must be greater than zero.'
+            );
+        }
+
+        $transactionDate ??= date('Y-m-d');
+
+        // Lock cash account
+        $stmt = $this->db->prepare("
+        SELECT id, current_balance
+        FROM cash_accounts
+        WHERE id = ?
+        FOR UPDATE
+    ");
+
+        $stmt->execute([$cashAccountId]);
+
+        $cashAccount = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$cashAccount) {
+            throw new \RuntimeException(
+                "Cash account '{$cashAccountId}' not found."
+            );
+        }
+
+        $balanceBefore = (float) $cashAccount['current_balance'];
+
+        if ($type === 'INFLOW') {
+            $balanceAfter = $balanceBefore + $amount;
+        } else {
+            $balanceAfter = $balanceBefore - $amount;
+
+            if ($balanceAfter < 0) {
+                throw new \RuntimeException(
+                    'Insufficient cash balance.'
+                );
+            }
+        }
+
+        $transactionId = 'ctx_' . bin2hex(random_bytes(6));
+
+        // Record movement history
+        $stmt = $this->db->prepare("
+        INSERT INTO cash_transactions (
+            id,
+            transaction_no,
+            cash_account_id,
+            type,
+            amount,
+            balance_before,
+            balance_after,
+            running_balance,
+            reference_number,
+            reference_type,
+            reference_id,
+            description,
+            notes,
+            transaction_date,
+            created_by
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+    ");
+
+        $stmt->execute([
+            $transactionId,
+            $transactionNo,
+            $cashAccountId,
+            $type,
+            $amount,
+            $balanceBefore,
+            $balanceAfter,
+            $balanceAfter,
+            $referenceNumber,
+            $referenceType,
+            $referenceId,
+            $description,
+            $notes,
+            $transactionDate,
+            $createdBy
+        ]);
+
+        // Update current balance
+        $stmt = $this->db->prepare("
+        UPDATE cash_accounts
+        SET current_balance = ?
+        WHERE id = ?
+    ");
+
+        $stmt->execute([
+            $balanceAfter,
+            $cashAccountId
+        ]);
     }
 }
