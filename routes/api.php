@@ -93,8 +93,8 @@ $router->get('/api/loans', [LoanController::class, 'index']);
 $router->post('/api/loans', [LoanController::class, 'store']);
 $router->get('/api/loans/:id', [LoanController::class, 'show']);
 $router->get('/api/loans/:id/schedule', [LoanController::class, 'schedule']);
-$router->post('/api/loans/originate', [LoanController::class, 'originate']);
-$router->post('/api/loans/apply', [LoanController::class, 'apply']);
+// $router->post('/api/loans/originate', [LoanController::class, 'originate']);
+// $router->post('/api/loans/apply', [LoanController::class, 'apply']);
 $router->post('/api/loans/calculate-schedule', [LoanController::class, 'calculateSchedule']);
 $router->post('/api/loans/payments', [LoanController::class, 'payment']);
 $router->post('/api/loans/repay', [LoanController::class, 'repay']);
@@ -102,6 +102,12 @@ $router->post('/api/loans/:id/repay', [LoanController::class, 'repay']);
 $router->delete('/api/loans/:id', [LoanController::class, 'destroy']);
 // 
 $router->put('/api/loan/:id', [LoanController::class, 'updateLoanStatus']);
+//New implementation of Loan process
+$router->post('/api/loans/apply',[LoanController::class, 'apply']);
+
+$router->post('/api/loans/applications/approve',[LoanController::class, 'approveApplication']);
+
+$router->post('/api/loans/originate',[LoanController::class, 'originate']);
 
 // =========================================================================
 // 7. Savings Deposit Accounts & Passbooks

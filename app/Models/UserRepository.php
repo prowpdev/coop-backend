@@ -58,17 +58,26 @@ class UserRepository
     public function findByUsernameOrEmail(string $identifier): ?array
     {
         $stmt = $this->db->prepare("
-            SELECT u.*,
-                   r.name AS role_name, r.permissions AS role_permissions,
-                   b.name AS branch_name
+            SELECT 
+                u.*,
+                r.name AS role_name,
+                r.permissions AS role_permissions,
+                b.name AS branch_name
             FROM users u
             LEFT JOIN user_roles r ON u.role_id = r.id
             LEFT JOIN branches b ON u.branch_id = b.id
-            WHERE u.username = :identifier OR u.email = :identifier
+            WHERE u.username = :username
+            OR u.email = :email
             LIMIT 1
         ");
-        $stmt->execute(['identifier' => $identifier]);
+
+        $stmt->execute([
+            'username' => $identifier,
+            'email'    => $identifier,
+        ]);
+
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
         return $row ?: null;
     }
 
@@ -77,31 +86,63 @@ class UserRepository
      */
     public function create(array $data): array
     {
-        $id = $data['id'] ?? ('usr_' . bin2hex(random_bytes(6)));
-        $password = $data['password'] ?? 'Pass@123';
-        $passwordHash = password_hash($password, PASSWORD_BCRYPT);
+        $id = $data['id'] ?? 'usr_' . bin2hex(random_bytes(8));
+
+        $passwordHash = $data['password_hash']
+            ?? password_hash($data['password'] ?? '', PASSWORD_DEFAULT);
+
+        $active = isset($data['active'])
+            ? (int) $data['active']
+            : 1;
+
+        $lastLogin = $data['last_login'] ?? null;
+
+        $createdAt = $data['created_at']
+            ?? date('Y-m-d H:i:s');
 
         $sql = "
             INSERT INTO users (
-                id, username, password_hash, full_name, email, role_id, branch_id, active
-            ) VALUES (
-                :id, :username, :password_hash, :full_name, :email, :role_id, :branch_id, :active
+                id,
+                username,
+                password_hash,
+                full_name,
+                email,
+                role_id,
+                branch_id,
+                active,
+                last_login,
+                created_at
+            )
+            VALUES (
+                :id,
+                :username,
+                :password_hash,
+                :full_name,
+                :email,
+                :role_id,
+                :branch_id,
+                :active,
+                :last_login,
+                :created_at
             )
         ";
 
         $stmt = $this->db->prepare($sql);
+
         $stmt->execute([
             'id'            => $id,
             'username'      => $data['username'],
             'password_hash' => $passwordHash,
             'full_name'     => $data['full_name'],
             'email'         => $data['email'],
-            'role_id'       => $data['role_id'] ?? 'role_loan_officer',
-            'branch_id'     => $data['branch_id'] ?? 'branch_tar',
-            'active'        => isset($data['active']) ? (int)$data['active'] : 1
+            'role_id'       => $data['role_id'],
+            'branch_id'     => $data['branch_id'],
+            'active'        => $active,
+            'last_login'    => $lastLogin,
+            'created_at'    => $createdAt,
         ]);
 
-        return $this->findById($id) ?? [];
+        return $this->findById($id);
     }
 
     /**

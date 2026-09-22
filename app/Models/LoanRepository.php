@@ -1021,4 +1021,925 @@ class LoanRepository
         return $this->find($id) ?? [];
     
     }
+
+    /**
+     * NEW METHODS
+     */
+    /**
+     * Create a loan application only.
+     *
+     * Does not create a loan.
+     * Does not disburse cash.
+     * Does not create amortization.
+     */
+    public function createApplication(array $data): array
+    {
+        $this->db->beginTransaction();
+
+        try {
+            if (empty($data['member_id'])) {
+                throw new \InvalidArgumentException(
+                    'Member is required.'
+                );
+            }
+
+            if (empty($data['loan_product_id'])) {
+                throw new \InvalidArgumentException(
+                    'Loan product is required.'
+                );
+            }
+
+            if (empty($data['branch_id'])) {
+                throw new \InvalidArgumentException(
+                    'Branch is required.'
+                );
+            }
+
+            $principal = (float) (
+                $data['principal_amount'] ?? 0
+            );
+
+            if ($principal <= 0) {
+                throw new \InvalidArgumentException(
+                    'Principal amount must be greater than zero.'
+                );
+            }
+
+            /*
+            * ------------------------------------------------------------
+            * Get loan product
+            * ------------------------------------------------------------
+            */
+
+            $productStmt = $this->db->prepare("
+                SELECT *
+                FROM loan_products
+                WHERE id = :id
+                LIMIT 1
+            ");
+
+            $productStmt->execute([
+                'id' => $data['loan_product_id']
+            ]);
+           
+            $product = $productStmt->fetch(\PDO::FETCH_ASSOC);
+
+            if (!$product) {
+                throw new \InvalidArgumentException(
+                    'Loan product not found.'
+                );
+            }
+
+            /*
+            * ------------------------------------------------------------
+            * Validate loan amount
+            * ------------------------------------------------------------
+            */
+
+            $minAmount = (float) (
+                $product['min_amount'] ?? 0
+            );
+
+            $maxAmount = (float) (
+                $product['max_amount'] ?? 0
+            );
+
+            if (
+                $minAmount > 0 &&
+                $principal < $minAmount
+            ) {
+                throw new \InvalidArgumentException(
+                    "Loan amount cannot be less than {$minAmount}."
+                );
+            }
+
+            if (
+                $maxAmount > 0 &&
+                $principal > $maxAmount
+            ) {
+                throw new \InvalidArgumentException(
+                    "Loan amount cannot exceed {$maxAmount}."
+                );
+            }
+
+            /*
+            * ------------------------------------------------------------
+            * Term
+            * ------------------------------------------------------------
+            */
+
+            $term = (int) (
+                $data['term_months']
+                ?? $product['min_term_months']
+                ?? 12
+            );
+
+            $minTerm = (int) (
+                $product['min_term_months'] ?? 0
+            );
+
+            $maxTerm = (int) (
+                $product['max_term_months'] ?? 0
+            );
+
+            if (
+                $minTerm > 0 &&
+                $term < $minTerm
+            ) {
+                throw new \InvalidArgumentException(
+                    "Loan term cannot be less than {$minTerm} months."
+                );
+            }
+
+            if (
+                $maxTerm > 0 &&
+                $term > $maxTerm
+            ) {
+                throw new \InvalidArgumentException(
+                    "Loan term cannot exceed {$maxTerm} months."
+                );
+            }
+
+            /*
+            * ------------------------------------------------------------
+            * IDs
+            * ------------------------------------------------------------
+            */
+
+            $applicationId = $data['application_id']
+                ?? 'la_' . bin2hex(random_bytes(6));
+
+            $applicationNo = $data['application_no']
+                ?? (
+                    'LA-' .
+                    date('Y') .
+                    '-' .
+                    str_pad(
+                        (string) mt_rand(1, 99999),
+                        5,
+                        '0',
+                        STR_PAD_LEFT
+                    )
+                );
+
+            $submittedDate = $data['submitted_date']
+                ?? date('Y-m-d');
+
+            /*
+            * ------------------------------------------------------------
+            * Insert application
+            * ------------------------------------------------------------
+            */
+
+            $stmt = $this->db->prepare("
+                INSERT INTO loan_applications (
+                    id,
+                    application_no,
+                    member_id,
+                    loan_product_id,
+                    branch_id,
+                    applied_amount,
+                    term_months,
+                    purpose,
+                    status,
+                    submitted_date,
+                    reviewed_by,
+                    reviewed_date,
+                    approved_amount,
+                    remarks
+                ) VALUES (
+                    :id,
+                    :application_no,
+                    :member_id,
+                    :loan_product_id,
+                    :branch_id,
+                    :applied_amount,
+                    :term_months,
+                    :purpose,
+                    :status,
+                    :submitted_date,
+                    :reviewed_by,
+                    :reviewed_date,
+                    :approved_amount,
+                    :remarks
+                )
+            ");
+         
+            $stmt->execute([
+                'id' => $applicationId,
+
+                'application_no' => $applicationNo,
+
+                'member_id' => $data['member_id'],
+
+                'loan_product_id' =>
+                    $data['loan_product_id'],
+
+                'branch_id' =>
+                    $data['branch_id'],
+
+                'applied_amount' =>
+                    $principal,
+
+                'term_months' =>
+                    $term,
+
+                'purpose' =>
+                    $data['purpose'] ?? null,
+
+                'status' =>
+                    $data['status'] ?? 'Pending',
+
+                'submitted_date' =>
+                    $submittedDate,
+
+                'reviewed_by' =>
+                    null,
+
+                'reviewed_date' =>
+                    null,
+
+                'approved_amount' =>
+                    null,
+
+                'remarks' =>
+                    $data['remarks'] ?? null
+            ]);
+
+            $this->db->commit();
+            
+
+            return $this->findApplication($applicationId) ?? [];
+
+        } catch (\Throwable $e) {
+
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $e;
+        }
+    }
+    /**
+     * Find loan application.
+     */
+    public function findApplication(string $id): ?array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                la.*,
+
+                lp.code AS loan_product_code,
+                lp.name AS loan_product_name,
+
+                b.name AS branch_name
+
+            FROM loan_applications la
+
+            LEFT JOIN loan_products lp
+                ON la.loan_product_id = lp.id
+
+            LEFT JOIN branches b
+                ON la.branch_id = b.id
+
+            WHERE la.id = :id
+
+            LIMIT 1
+        ");
+
+        $stmt->execute([
+            'id' => $id
+        ]);
+
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+    /**
+     * Approve a loan application.
+     *
+     * Does not create the loan.
+     * Does not disburse cash.
+     */
+    public function approveApplication(array $data): array
+    {
+        $this->db->beginTransaction();
+
+        try {
+            $applicationId = $data['application_id']
+                ?? null;
+
+            if (!$applicationId) {
+                throw new \InvalidArgumentException(
+                    'Loan application is required.'
+                );
+            }
+
+            /*
+            * Get application
+            */
+            $stmt = $this->db->prepare("
+                SELECT *
+                FROM loan_applications
+                WHERE id = :id
+                LIMIT 1
+            ");
+
+            $stmt->execute([
+                'id' => $applicationId
+            ]);
+
+            $application = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+            if (!$application) {
+                throw new \InvalidArgumentException(
+                    'Loan application not found.'
+                );
+            }
+
+            /*
+            * Check current status
+            */
+            if ($application['status'] !== 'Pending') {
+                throw new \InvalidArgumentException(
+                    'Only pending applications can be approved.'
+                );
+            }
+
+            /*
+            * Approved amount
+            */
+            $approvedAmount = (float) (
+                $data['approved_amount']
+                ?? $application['applied_amount']
+            );
+
+            if ($approvedAmount <= 0) {
+                throw new \InvalidArgumentException(
+                    'Approved amount must be greater than zero.'
+                );
+            }
+
+            /*
+            * Reviewer
+            */
+            $approvedBy =
+                $data['approved_by']
+                ?? $data['performed_by']
+                ?? null;
+
+            if (!$approvedBy) {
+                throw new \InvalidArgumentException(
+                    'Approving user is required.'
+                );
+            }
+
+            /*
+            * Update
+            */
+            $update = $this->db->prepare("
+                UPDATE loan_applications
+                SET
+                    status = 'Approved',
+                    approved_amount = :approved_amount,
+                    reviewed_by = :reviewed_by,
+                    reviewed_date = :reviewed_date,
+                    remarks = :remarks
+                WHERE id = :id
+            ");
+
+            $update->execute([
+                'approved_amount' =>
+                    $approvedAmount,
+
+                'reviewed_by' =>
+                    $approvedBy,
+
+                'reviewed_date' =>
+                    $data['reviewed_date']
+                    ?? date('Y-m-d'),
+
+                'remarks' =>
+                    $data['remarks']
+                    ?? $application['remarks'],
+
+                'id' =>
+                    $applicationId
+            ]);
+
+            $this->db->commit();
+
+            return $this->findApplication(
+                $applicationId
+            ) ?? [];
+
+        } catch (\Throwable $e) {
+
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $e;
+        }
+    }
+    /**
+     * Disburse an approved loan application.
+     *
+     * Creates:
+     * - loans record
+     * - amortization schedule
+     *
+     * Updates:
+     * - loan application status → Released
+     *
+     * Later this transaction should also include:
+     * - cash transaction
+     * - GL journal voucher
+     */
+    public function disburseLoan(array $data): array
+    {
+        $this->db->beginTransaction();
+
+        try {
+
+            /*
+            * ============================================================
+            * 1. APPLICATION
+            * ============================================================
+            */
+
+            $applicationId =
+                $data['application_id'] ?? null;
+
+            if (!$applicationId) {
+                throw new \InvalidArgumentException(
+                    'Loan application is required.'
+                );
+            }
+
+            $applicationStmt = $this->db->prepare("
+                SELECT *
+                FROM loan_applications
+                WHERE id = :id
+                LIMIT 1
+                FOR UPDATE
+            ");
+
+            $applicationStmt->execute([
+                'id' => $applicationId
+            ]);
+
+            $application =
+                $applicationStmt->fetch(\PDO::FETCH_ASSOC);
+
+            if (!$application) {
+                throw new \InvalidArgumentException(
+                    'Loan application not found.'
+                );
+            }
+
+            /*
+            * ============================================================
+            * 2. APPLICATION MUST BE APPROVED
+            * ============================================================
+            */
+
+            if ($application['status'] !== 'Approved') {
+                throw new \InvalidArgumentException(
+                    'Only approved loan applications can be disbursed.'
+                );
+            }
+
+            /*
+            * ============================================================
+            * 3. PREVENT DOUBLE DISBURSEMENT
+            * ============================================================
+            */
+
+            $existingStmt = $this->db->prepare("
+                SELECT
+                    id,
+                    loan_account_no
+                FROM loans
+                WHERE application_id = :application_id
+                LIMIT 1
+            ");
+
+            $existingStmt->execute([
+                'application_id' =>
+                    $applicationId
+            ]);
+
+            $existingLoan =
+                $existingStmt->fetch(\PDO::FETCH_ASSOC);
+
+            if ($existingLoan) {
+                throw new \InvalidArgumentException(
+                    'This loan application has already been disbursed.'
+                );
+            }
+
+            /*
+            * ============================================================
+            * 4. CASH ACCOUNT
+            * ============================================================
+            */
+
+            $cashAccountId =
+                $data['disbursed_from_cash_account_id']
+                ?? $data['cash_account_id']
+                ?? null;
+
+            if (!$cashAccountId) {
+                throw new \InvalidArgumentException(
+                    'Disbursement cash account is required.'
+                );
+            }
+
+            /*
+            * ============================================================
+            * 5. PRODUCT
+            * ============================================================
+            */
+
+            $productStmt = $this->db->prepare("
+                SELECT *
+                FROM loan_products
+                WHERE id = :id
+                LIMIT 1
+            ");
+
+            $productStmt->execute([
+                'id' =>
+                    $application['loan_product_id']
+            ]);
+
+            $product =
+                $productStmt->fetch(\PDO::FETCH_ASSOC);
+
+            if (!$product) {
+                throw new \InvalidArgumentException(
+                    'Loan product not found.'
+                );
+            }
+
+            /*
+            * ============================================================
+            * 6. LOAN VALUES
+            * ============================================================
+            */
+
+            $principal = (float) (
+                $application['approved_amount']
+                ?? $application['applied_amount']
+            );
+
+            if ($principal <= 0) {
+                throw new \InvalidArgumentException(
+                    'Approved loan amount must be greater than zero.'
+                );
+            }
+
+            $rate = (float) (
+                $data['annual_interest_rate']
+                ?? $product['annual_interest_rate']
+            );
+
+            $term = (int) (
+                $application['term_months']
+            );
+
+            $method =
+                $data['interest_calculation_method']
+                ?? $product['interest_calculation_method'];
+
+            $frequency =
+                $data['payment_frequency']
+                ?? $product['payment_frequency']
+                ?? 'Monthly';
+
+            $startDate =
+                $data['disbursement_date']
+                ?? date('Y-m-d');
+
+            $firstDueDate =
+                $data['first_due_date']
+                ?? (
+                    new \DateTime($startDate)
+                )
+                    ->modify('+1 month')
+                    ->format('Y-m-d');
+
+            $maturityDate =
+                $data['maturity_date']
+                ?? (
+                    new \DateTime($firstDueDate)
+                )
+                    ->modify(
+                        '+' .
+                        max(0, $term - 1) .
+                        ' months'
+                    )
+                    ->format('Y-m-d');
+
+            $processingFee = (float) (
+                $data['processing_fee'] ?? 0
+            );
+
+            $serviceFee = (float) (
+                $data['service_fee'] ?? 0
+            );
+
+            $netDisbursed = isset(
+                $data['net_disbursed']
+            )
+                ? (float) $data['net_disbursed']
+                : max(
+                    0,
+                    $principal
+                    - $processingFee
+                    - $serviceFee
+                );
+
+            /*
+            * ============================================================
+            * 7. GENERATE LOAN ID
+            * ============================================================
+            */
+
+            $loanId =
+                $data['id']
+                ?? 'ln_' . bin2hex(random_bytes(6));
+
+            $accountNo =
+                $data['loan_account_no']
+                ?? (
+                    'LN-' .
+                    date('Y') .
+                    '-' .
+                    str_pad(
+                        (string) mt_rand(1, 99999),
+                        5,
+                        '0',
+                        STR_PAD_LEFT
+                    )
+                );
+
+            /*
+            * ============================================================
+            * 8. CREATE LOAN
+            * ============================================================
+            */
+
+            $sql = "
+                INSERT INTO loans (
+                    id,
+                    loan_account_no,
+                    application_id,
+                    member_id,
+                    loan_product_id,
+                    product_version,
+                    branch_id,
+                    principal_amount,
+                    annual_interest_rate,
+                    interest_calculation_method,
+                    term_months,
+                    payment_frequency,
+                    disbursement_date,
+                    first_due_date,
+                    maturity_date,
+                    processing_fee,
+                    service_fee,
+                    net_disbursed,
+                    disbursed_from_cash_account_id,
+                    status,
+                    current_balance,
+                    total_principal_paid,
+                    total_interest_paid,
+                    total_penalty_paid,
+                    total_fees_paid,
+                    approved_by,
+                    approved_date
+                )
+                VALUES (
+                    :id,
+                    :loan_account_no,
+                    :application_id,
+                    :member_id,
+                    :loan_product_id,
+                    :product_version,
+                    :branch_id,
+                    :principal_amount,
+                    :annual_interest_rate,
+                    :interest_calculation_method,
+                    :term_months,
+                    :payment_frequency,
+                    :disbursement_date,
+                    :first_due_date,
+                    :maturity_date,
+                    :processing_fee,
+                    :service_fee,
+                    :net_disbursed,
+                    :disbursed_from_cash_account_id,
+                    :status,
+                    :current_balance,
+                    0,
+                    0,
+                    0,
+                    0,
+                    :approved_by,
+                    :approved_date
+                )
+            ";
+
+            $stmt = $this->db->prepare($sql);
+
+            $stmt->execute([
+                'id' =>
+                    $loanId,
+
+                'loan_account_no' =>
+                    $accountNo,
+
+                'application_id' =>
+                    $applicationId,
+
+                'member_id' =>
+                    $application['member_id'],
+
+                'loan_product_id' =>
+                    $application['loan_product_id'],
+
+                'product_version' =>
+                    $data['product_version']
+                    ?? ($product['version'] ?? 1),
+
+                'branch_id' =>
+                    $application['branch_id'],
+
+                'principal_amount' =>
+                    $principal,
+
+                'annual_interest_rate' =>
+                    $rate,
+
+                'interest_calculation_method' =>
+                    $method,
+
+                'term_months' =>
+                    $term,
+
+                'payment_frequency' =>
+                    $frequency,
+
+                'disbursement_date' =>
+                    $startDate,
+
+                'first_due_date' =>
+                    $firstDueDate,
+
+                'maturity_date' =>
+                    $maturityDate,
+
+                'processing_fee' =>
+                    $processingFee,
+
+                'service_fee' =>
+                    $serviceFee,
+
+                'net_disbursed' =>
+                    $netDisbursed,
+
+                'disbursed_from_cash_account_id' =>
+                    $cashAccountId,
+
+                'status' =>
+                    'Active',
+
+                'current_balance' =>
+                    $principal,
+
+                'approved_by' =>
+                    $data['approved_by']
+                    ?? $data['performed_by']
+                    ?? null,
+
+                'approved_date' =>
+                    $data['approved_date']
+                    ?? $startDate
+            ]);
+
+            /*
+            * ============================================================
+            * 9. AMORTIZATION
+            * ============================================================
+            */
+
+            $schedule =
+                \App\Services\AmortizationService::generateSchedule(
+                    $principal,
+                    $rate,
+                    $term,
+                    $method,
+                    $startDate,
+                    $frequency
+                );
+
+            $schedStmt = $this->db->prepare("
+                INSERT INTO loan_amortization_schedules (
+                    id,
+                    loan_id,
+                    installment_no,
+                    due_date,
+                    principal,
+                    interest,
+                    total_installment,
+                    principal_balance,
+                    paid_principal,
+                    paid_interest,
+                    status
+                )
+                VALUES (
+                    :id,
+                    :loan_id,
+                    :installment_no,
+                    :due_date,
+                    :principal,
+                    :interest,
+                    :total_installment,
+                    :principal_balance,
+                    0,
+                    0,
+                    'Unpaid'
+                )
+            ");
+
+            foreach ($schedule as $row) {
+
+                $schedStmt->execute([
+                    'id' =>
+                        'las_' .
+                        bin2hex(random_bytes(6)),
+
+                    'loan_id' =>
+                        $loanId,
+
+                    'installment_no' =>
+                        $row['installment_no'],
+
+                    'due_date' =>
+                        $row['due_date'],
+
+                    'principal' =>
+                        $row['principal'],
+
+                    'interest' =>
+                        $row['interest'],
+
+                    'total_installment' =>
+                        $row['total_installment'],
+
+                    'principal_balance' =>
+                        $row['principal_balance']
+                ]);
+            }
+
+            /*
+            * ============================================================
+            * 10. MARK APPLICATION AS RELEASED
+            * ============================================================
+            */
+
+            $updateApplication =
+                $this->db->prepare("
+                    UPDATE loan_applications
+                    SET
+                        status = 'Released'
+                    WHERE id = :id
+                ");
+
+            $updateApplication->execute([
+                'id' =>
+                    $applicationId
+            ]);
+
+            /*
+            * ============================================================
+            * 11. COMMIT
+            * ============================================================
+            */
+
+            $this->db->commit();
+
+            return $this->find($loanId) ?? [];
+
+        } catch (\Throwable $e) {
+
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $e;
+        }
+    }
 }

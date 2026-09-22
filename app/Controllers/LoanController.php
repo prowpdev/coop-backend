@@ -108,24 +108,7 @@ class LoanController extends BaseController
         return $this->success($result,'success');
         
     }
-    /**
-     * POST /api/loans/originate
-     * POST /api/loans/apply
-     */
-    public function originate(): never
-    {
-        $this->store();
-    }
-
-    public function apply(): never
-    {
-        $input = $this->getRequestBody();
-        $input['disbursed_from_cash_account_id'] = $input['disbursed_from_cash_account_id']
-            ?? $input['cash_account_id']
-            ?? null;
-        $input['status'] = $input['status'] ?? 'Submitted';
-        $this->store($input);
-    }
+    /**DELETED MEHTODS apply() & originate() */
 
     /**
      * POST /api/loans/:id/repay
@@ -244,5 +227,124 @@ class LoanController extends BaseController
         }
 
         $this->success(['id' => $id], 'Loan deleted successfully.');
+    }
+    /**
+     * NEW UPDATED METHODS
+     */
+    public function apply(): never
+    {
+        $input = $this->getRequestBody();
+
+        if (empty($input['member_id'])) {
+            $this->error('Member is required.', 422);
+        }
+
+        if (empty($input['loan_product_id'])) {
+            $this->error('Loan Product is required.', 422);
+        }
+
+        if (empty($input['branch_id'])) {
+            $this->error('Branch is required.', 422);
+        }
+
+        if (empty($input['principal_amount'])) {
+            $this->error('Loan amount is required.', 422);
+        }
+
+        try {
+            
+            $application = $this->loans->createApplication($input);
+
+            $this->success(
+                $application,
+                'Loan application submitted successfully.',
+                201
+            );
+        } catch (\Throwable $e) {
+            $this->error(
+                'Loan application failed: ' . $e->getMessage(),
+                500
+            );
+        }
+    }
+
+
+    /**
+     * POST /api/loans/applications/approve
+     *
+     * Approve an existing loan application.
+     *
+     * This DOES NOT disburse money.
+     */
+    public function approveApplication(): never
+    {
+        $input = $this->getRequestBody();
+
+        if (empty($input['application_id'])) {
+            $this->error('Loan application is required.', 422);
+        }
+
+        if (empty($input['approved_amount'])) {
+            $this->error('Approved amount is required.', 422);
+        }
+
+        try {
+            $application = $this->loans->approveApplication($input);
+
+            $this->success(
+                $application,
+                'Loan application approved successfully.',
+                200
+            );
+        } catch (\Throwable $e) {
+            $this->error(
+                'Loan approval failed: ' . $e->getMessage(),
+                500
+            );
+        }
+    }
+
+
+    /**
+     * POST /api/loans/originate
+     *
+     * Disburse an approved loan application.
+     */
+    public function originate(): never
+    {
+        $input = $this->getRequestBody();
+
+        if (empty($input['application_id'])) {
+            $this->error('Loan application is required.', 422);
+        }
+
+        if (
+            empty($input['disbursed_from_cash_account_id']) &&
+            empty($input['cash_account_id'])
+        ) {
+            $this->error(
+                'Disbursement cash account is required.',
+                422
+            );
+        }
+
+        $input['disbursed_from_cash_account_id']
+            = $input['disbursed_from_cash_account_id']
+            ?? $input['cash_account_id'];
+
+        try {
+            $loan = $this->loans->disburseLoan($input);
+
+            $this->success(
+                $loan,
+                'Loan disbursed and amortization schedule initialized successfully.',
+                201
+            );
+        } catch (\Throwable $e) {
+            $this->error(
+                'Loan disbursement failed: ' . $e->getMessage(),
+                500
+            );
+        }
     }
 }
