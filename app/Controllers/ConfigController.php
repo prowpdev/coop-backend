@@ -44,6 +44,43 @@ class ConfigController extends BaseController
     }
 
     /**
+     * GET /api/audit-logs or /api/configuration_audit_trails
+     */
+    public function auditLogs(): never
+    {
+        $stmt = $this->db->query("SELECT * FROM configuration_audit_trails ORDER BY created_at DESC");
+        $logs = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        $this->success($logs);
+    }
+
+    /**
+     * POST /api/audit-logs
+     */
+    public function recordAuditLog(): never
+    {
+        $input = $this->getRequestBody();
+        if (empty($input['setting'])) {
+            $this->error('Setting or action description is required.', 422);
+        }
+        $id = 'audit_' . bin2hex(random_bytes(8));
+        $now = date('c');
+        $stmt = $this->db->prepare("
+            INSERT INTO configuration_audit_trails (id, setting, old_value, new_value, changed_by, created_at, reason)
+            VALUES (:id, :setting, :old_value, :new_value, :changed_by, :created_at, :reason)
+        ");
+        $stmt->execute([
+            'id' => $id,
+            'setting' => $input['setting'],
+            'old_value' => (string)($input['old_value'] ?? 'None'),
+            'new_value' => (string)($input['new_value'] ?? 'None'),
+            'changed_by' => (string)($input['changed_by'] ?? 'Administrator'),
+            'created_at' => $now,
+            'reason' => (string)($input['reason'] ?? 'System event')
+        ]);
+        $this->success(['id' => $id, 'created_at' => $now], 'Audit log recorded successfully.', 201);
+    }
+
+    /**
      * GET /api/branches or /api/config/branches
      */
     public function branches(): never

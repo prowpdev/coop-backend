@@ -62,8 +62,8 @@ class DatabaseResetter
           'cooperatives',
           'system_settings',
           'transaction_types',
-          'user_roles',
-          'users',
+        //   'user_roles',
+        //   'users',
 
 
         ];

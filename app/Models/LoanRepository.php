@@ -1315,6 +1315,85 @@ class LoanRepository
 
         return $row ?: null;
     }
+
+    /**
+     * Get all loan applications with optional filtering.
+     */
+    public function allApplications(?string $branchId = null, ?string $status = null, ?string $memberId = null): array
+    {
+        $sql = "
+            SELECT
+                la.*,
+                CONCAT(COALESCE(m.first_name, ''), ' ', COALESCE(m.last_name, '')) AS member_name,
+                m.member_no,
+                lp.code AS loan_product_code,
+                lp.name AS loan_product_name,
+                lp.name AS product_name,
+                b.name AS branch_name
+            FROM loan_applications la
+            LEFT JOIN members m ON la.member_id = m.id
+            LEFT JOIN loan_products lp ON la.loan_product_id = lp.id
+            LEFT JOIN branches b ON la.branch_id = b.id
+            WHERE 1=1
+        ";
+        
+        $params = [];
+        if ($branchId && $branchId !== 'all') {
+            $sql .= " AND la.branch_id = :branch_id";
+            $params['branch_id'] = $branchId;
+        }
+        if ($status && $status !== 'all') {
+            $sql .= " AND LOWER(la.status) = LOWER(:status)";
+            $params['status'] = $status;
+        }
+        if ($memberId) {
+            $sql .= " AND la.member_id = :member_id";
+            $params['member_id'] = $memberId;
+        }
+        $sql .= " ORDER BY la.created_at DESC";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Reject a loan application.
+     */
+    public function rejectApplication(array $data): array
+    {
+        $applicationId = $data['application_id'] ?? null;
+        if (!$applicationId) {
+            throw new \InvalidArgumentException('Loan application ID is required.');
+        }
+
+        $app = $this->findApplication($applicationId);
+        if (!$app) {
+            throw new \RuntimeException('Loan application not found.');
+        }
+
+        $reviewer = $data['reviewed_by'] ?? $data['performed_by'] ?? 'Credit Committee';
+        $today = date('Y-m-d');
+        $remarks = $data['remarks'] ?? $app['remarks'] ?? null;
+
+        $stmt = $this->db->prepare("
+            UPDATE loan_applications
+            SET status = 'Rejected',
+                reviewed_by = :reviewed_by,
+                reviewed_date = :reviewed_date,
+                remarks = :remarks
+            WHERE id = :id
+        ");
+        $stmt->execute([
+            'reviewed_by' => $reviewer,
+            'reviewed_date' => $today,
+            'remarks' => $remarks,
+            'id' => $applicationId
+        ]);
+
+        return $this->findApplication($applicationId);
+    }
+
     /**
      * Approve a loan application.
      *
