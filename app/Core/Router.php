@@ -61,46 +61,55 @@ class Router
 
         $method = strtoupper($method);
 
+        $candidateUris = [$uri];
+        if (str_starts_with($uri, '/api/')) {
+            $candidateUris[] = substr($uri, 4);
+        } else {
+            $candidateUris[] = '/api' . $uri;
+        }
+
         foreach ($this->routes as $route) {
             if ($route['method'] !== $method) {
                 continue;
             }
 
-            if (preg_match($route['pattern'], $uri, $matches)) {
-                $params = [];
-                foreach ($matches as $key => $value) {
-                    if (is_string($key)) {
-                        $params[$key] = $value;
+            foreach ($candidateUris as $candidateUri) {
+                if (preg_match($route['pattern'], $candidateUri, $matches)) {
+                    $params = [];
+                    foreach ($matches as $key => $value) {
+                        if (is_string($key)) {
+                            $params[$key] = $value;
+                        }
                     }
+
+                    [$controllerClass, $action] = $route['handler'];
+
+                    if (!class_exists($controllerClass)) {
+                        http_response_code(500);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error'   => "Controller class '$controllerClass' not found."
+                        ]);
+                        exit;
+                    }
+
+                    $controller = new $controllerClass($db);
+
+                    if (!method_exists($controller, $action)) {
+                        http_response_code(500);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error'   => "Action method '$action' not found in '$controllerClass'."
+                        ]);
+                        exit;
+                    }
+
+                    // Call the controller action with params
+                    call_user_func_array([$controller, $action], array_values($params));
+                    return;
                 }
-
-                [$controllerClass, $action] = $route['handler'];
-
-                if (!class_exists($controllerClass)) {
-                    http_response_code(500);
-                    header('Content-Type: application/json; charset=utf-8');
-                    echo json_encode([
-                        'success' => false,
-                        'error'   => "Controller class '$controllerClass' not found."
-                    ]);
-                    exit;
-                }
-
-                $controller = new $controllerClass($db);
-
-                if (!method_exists($controller, $action)) {
-                    http_response_code(500);
-                    header('Content-Type: application/json; charset=utf-8');
-                    echo json_encode([
-                        'success' => false,
-                        'error'   => "Action method '$action' not found in '$controllerClass'."
-                    ]);
-                    exit;
-                }
-
-                // Call the controller action with params
-                call_user_func_array([$controller, $action], array_values($params));
-                return;
             }
         }
 

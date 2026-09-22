@@ -18,15 +18,15 @@ class SeederController extends BaseController
         $this->seeder = new DatabaseSeeder($db);
     }
 
-    public function run(): array
+    public function run(): never
     {
-        $results =  $this->seeder->run();
-        $this->success($results,'database seeders success',200);
+        $results = $this->seeder->run();
+        $this->success($results, 'database seeders success', 200);
     }
 
-    public function reset():array
+    public function reset(): never
     {
-        $results =  $this->seeder->resetDb();
-        $this->success($results,'database seeders success',200);
+        $results = $this->seeder->resetDb();
+        $this->success($results, 'database seeders reset success', 200);
     }
 }

@@ -96,7 +96,18 @@ class LoanController extends BaseController
             ]
         ]);
     }
-
+    /**
+     * Update Loan Status
+     * PUT /api/loans/:id
+     */
+    public function updateLoanStatus(string $id):array
+    {
+        $status = $this->getRequestBody();
+        $result = $this->loans->updateStatus($id, $status);
+        // return ['status'=>$this->getRequestBody()];
+        return $this->success($result,'success');
+        
+    }
     /**
      * POST /api/loans/originate
      * POST /api/loans/apply
@@ -112,7 +123,7 @@ class LoanController extends BaseController
         $input['disbursed_from_cash_account_id'] = $input['disbursed_from_cash_account_id']
             ?? $input['cash_account_id']
             ?? null;
-        $input['status'] = $input['status'] ?? 'Active';
+        $input['status'] = $input['status'] ?? 'Submitted';
         $this->store($input);
     }
 

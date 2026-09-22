@@ -221,4 +221,38 @@ class SystemController extends BaseController
             $this->error($e->getMessage(), 500);
         }
     }
+
+    /**
+     * POST /api/system/reset-seed
+     */
+    public function resetSeed(): never
+    {
+        try {
+            $seeder = new \App\Seeders\DatabaseSeeder($this->db);
+            $resetResult = $seeder->resetDb();
+            $seedResult = $seeder->run();
+
+            $this->success([
+                'reset' => $resetResult,
+                'seeded' => $seedResult
+            ], 'System reset to seed state successfully.');
+        } catch (\Exception $e) {
+            $this->error('Failed to reset to seed: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * POST /api/system/seed-sample-data
+     */
+    public function seedSampleMembers(): never
+    {
+        try {
+            $seeder = new \App\Seeders\MemberSeeder($this->db);
+            $seededMembers = $seeder->run();
+            $this->success($seededMembers, 'Sample member data seeded successfully.');
+        } catch (\Exception $e) {
+            $this->error('Failed to seed sample members: ' . $e->getMessage(), 500);
+        }
+    }
 }
+

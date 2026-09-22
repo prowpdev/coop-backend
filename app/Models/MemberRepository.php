@@ -166,173 +166,375 @@ class MemberRepository
     /**
      * Get member comprehensive statement / portfolio
      */
-    public function getMemberReport(string $id): array
-    {
-        $member = $this->find($id);
-        if (!$member) {
-            return [];
-        }
+/**
+ * Get member comprehensive statement / portfolio
+ */
+public function getMemberReport(string $id): array
+{
+    $member = $this->find($id);
 
-        // Loans
-        $loanStmt = $this->db->prepare("
-            SELECT l.*, lp.name AS product_name
-            FROM loans l
-            LEFT JOIN loan_products lp ON l.loan_product_id = lp.id
-            WHERE l.member_id = ?
-            ORDER BY l.disbursement_date DESC
-        ");
-        $loanStmt->execute([$id]);
-        $loans = $loanStmt->fetchAll(PDO::FETCH_ASSOC);
+    if (!$member) {
+        return [];
+    }
 
-        // Savings
-        $savingsStmt = $this->db->prepare("
-            SELECT sa.*, sp.name AS product_name
-            FROM savings_accounts sa
-            LEFT JOIN savings_products sp ON sa.savings_product_id = sp.id
-            WHERE sa.member_id = ?
-        ");
-        $savingsStmt->execute([$id]);
-        $savings = $savingsStmt->fetchAll(PDO::FETCH_ASSOC);
+    // =========================================================
+    // Loans
+    // =========================================================
 
-        // Share Capital
-        $scStmt = $this->db->prepare("
-            SELECT * FROM share_capital_accounts WHERE member_id = ?
-        ");
-        $scStmt->execute([$id]);
-        $shareCapital = $scStmt->fetchAll(PDO::FETCH_ASSOC);
+    $loanStmt = $this->db->prepare("
+        SELECT l.*, lp.name AS product_name
+        FROM loans l
+        LEFT JOIN loan_products lp ON l.loan_product_id = lp.id
+        WHERE l.member_id = ?
+        ORDER BY l.disbursement_date DESC
+    ");
 
-        // Journal Vouchers (Manual and System JVs for this member)
-        $jvStmt = $this->db->prepare("
-            SELECT DISTINCT je.id, je.voucher_number, je.posting_date, je.description, je.reference_type,
-                je.total_debit, je.total_credit, je.status, je.created_by
-            FROM journal_entries je
-            LEFT JOIN journal_lines jl ON je.id = jl.journal_entry_id
-            WHERE je.reference_id = ?
-            OR jl.subsidiary_id = ?
-            OR je.description LIKE ?
-            ORDER BY je.posting_date DESC
-        ");
-        $memberName = '%' . ($member['first_name'] ?? '') . '%';
-        $jvStmt->execute([$id, $id, $memberName]);
-        $journalVouchers = $jvStmt->fetchAll(PDO::FETCH_ASSOC);
+    $loanStmt->execute([$id]);
 
-        $transactionStmt = $this->db->prepare("
-            SELECT * FROM (
-                SELECT
-                    l.id AS transaction_id,
-                    'LOAN_RELEASE' AS transaction_type,
-                    l.disbursement_date AS transaction_date,
-                    l.principal_amount AS amount,
-                    l.loan_account_no AS reference_number,
-                    l.loan_account_no AS account_number,
-                    l.current_balance AS balance_after,
-                    CONCAT('Loan disbursement - ', COALESCE(lp.name, 'Loan')) AS description,
-                    'loan' AS source,
-                    l.created_at
-                FROM loans l
-                LEFT JOIN loan_products lp ON lp.id = l.loan_product_id
-                WHERE l.member_id = :loan_member_id
+    $loans = $loanStmt->fetchAll(PDO::FETCH_ASSOC);
 
-                UNION ALL
 
-                SELECT
-                    p.id AS transaction_id,
-                    'LOAN_PAYMENT' AS transaction_type,
-                    p.payment_date AS transaction_date,
-                    p.total_amount AS amount,
-                    p.receipt_no AS reference_number,
-                    l.loan_account_no AS account_number,
-                    l.current_balance AS balance_after,
-                    CONCAT('Loan payment - ', l.loan_account_no) AS description,
-                    'loan' AS source,
-                    p.created_at
-                FROM loan_payments p
-                INNER JOIN loans l ON l.id = p.loan_id
-                WHERE p.member_id = :payment_member_id
+    // =========================================================
+    // Savings
+    // =========================================================
 
-                UNION ALL
+    $savingsStmt = $this->db->prepare("
+        SELECT sa.*, sp.name AS product_name
+        FROM savings_accounts sa
+        LEFT JOIN savings_products sp
+            ON sa.savings_product_id = sp.id
+        WHERE sa.member_id = ?
+    ");
 
-                SELECT
-                    st.id AS transaction_id,
-                    st.type AS transaction_type,
-                    st.transaction_date,
-                    st.amount,
-                    st.transaction_no AS reference_number,
-                    sa.account_number,
-                    st.balance_after,
-                    COALESCE(st.notes, CONCAT('Savings ', st.type)) AS description,
-                    'savings' AS source,
-                    st.created_at
-                FROM savings_transactions st
-                INNER JOIN savings_accounts sa ON sa.id = st.savings_account_id
-                WHERE st.member_id = :savings_member_id
+    $savingsStmt->execute([$id]);
 
-                UNION ALL
+    $savings = $savingsStmt->fetchAll(PDO::FETCH_ASSOC);
 
-                SELECT
-                    sct.id AS transaction_id,
-                    sct.type AS transaction_type,
-                    sct.transaction_date,
-                    sct.amount,
-                    sct.receipt_no AS reference_number,
-                    sca.account_number,
-                    NULL AS balance_after,
-                    CONCAT('Share capital ', sct.type) AS description,
-                    'share_capital' AS source,
-                    sct.created_at
-                FROM share_capital_transactions sct
-                INNER JOIN share_capital_accounts sca ON sca.id = sct.share_account_id
-                WHERE sct.member_id = :share_member_id
 
-                UNION ALL
+    // =========================================================
+    // Share Capital
+    // =========================================================
 
-                SELECT DISTINCT
-                    je.id AS transaction_id,
-                    je.reference_type AS transaction_type,
-                    je.posting_date AS transaction_date,
-                    je.total_debit AS amount,
-                    je.voucher_number AS reference_number,
-                    NULL AS account_number,
-                    NULL AS balance_after,
-                    je.description,
-                    'journal' AS source,
-                    je.posting_date AS created_at
-                FROM journal_entries je
-                LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
-                WHERE je.reference_id = :journal_reference_id
-                OR jl.subsidiary_id = :journal_subsidiary_id
-                OR je.description LIKE :journal_member_name
-            ) AS member_transactions
-            ORDER BY transaction_date DESC, created_at DESC
-        ");
-        $transactionStmt->execute([
-            'loan_member_id'        => $id,
-            'payment_member_id'     => $id,
-            'savings_member_id'     => $id,
-            'share_member_id'       => $id,
-            'journal_reference_id'  => $id,
-            'journal_subsidiary_id' => $id,
-            'journal_member_name'   => $memberName,
-        ]);
-        $transactions = $transactionStmt->fetchAll(PDO::FETCH_ASSOC);
-        $summary = $this->generateMemberSummary(
-            $loans,
-            $savings,
-            $shareCapital,
-            $transactions,
-            $journalVouchers
+    $scStmt = $this->db->prepare("
+        SELECT *
+        FROM share_capital_accounts
+        WHERE member_id = ?
+    ");
+
+    $scStmt->execute([$id]);
+
+    $shareCapital = $scStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+    // =========================================================
+    // Journal Vouchers
+    // Manual and System JVs for this member
+    // =========================================================
+
+    $jvStmt = $this->db->prepare("
+        SELECT DISTINCT
+            je.id,
+            je.voucher_number,
+            je.posting_date,
+            je.description,
+            je.reference_type,
+            je.total_debit,
+            je.total_credit,
+            je.status,
+            je.created_by
+        FROM journal_entries je
+        LEFT JOIN journal_lines jl
+            ON je.id = jl.journal_entry_id
+        WHERE je.reference_id = ?
+           OR jl.subsidiary_id = ?
+           OR je.description LIKE ?
+        ORDER BY je.posting_date DESC
+    ");
+
+    $memberName = '%' . ($member['first_name'] ?? '') . '%';
+
+    $jvStmt->execute([
+        $id,
+        $id,
+        $memberName
+    ]);
+
+    $journalVouchers = $jvStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+    // =========================================================
+    // Journal Voucher Lines
+    // =========================================================
+
+    /*
+     * Get all journal lines belonging to the journal vouchers
+     * found above.
+     */
+
+    $journalLinesByEntry = [];
+
+    if (!empty($journalVouchers)) {
+
+        $journalEntryIds = array_column(
+            $journalVouchers,
+            'id'
         );
 
-        return [
-            'member'            => $member,
-            'summary'          => $summary,
-            'loans'             => $loans,
-            'savings'           => $savings,
-            'share_capital'     => $shareCapital,
-            'journal_vouchers'  => $journalVouchers,
-            'transactions'      => $transactions
-        ];
+        // Remove empty IDs and duplicates
+        $journalEntryIds = array_values(
+            array_unique(
+                array_filter($journalEntryIds)
+            )
+        );
+
+        if (!empty($journalEntryIds)) {
+
+            $placeholders = implode(
+                ',',
+                array_fill(
+                    0,
+                    count($journalEntryIds),
+                    '?'
+                )
+            );
+
+            $journalLinesStmt = $this->db->prepare("
+                SELECT
+                    jl.id,
+                    jl.journal_entry_id,
+                    jl.account_id,
+                    jl.debit,
+                    jl.credit,
+                    jl.subsidiary_type,
+                    jl.subsidiary_id,
+                    coa.account_code,
+                    coa.name AS account_name
+                FROM journal_lines jl
+                LEFT JOIN chart_of_accounts coa
+                    ON coa.id = jl.account_id
+                WHERE jl.journal_entry_id IN ($placeholders)
+                ORDER BY jl.journal_entry_id, jl.id
+            ");
+
+            $journalLinesStmt->execute(
+                $journalEntryIds
+            );
+
+            $journalLines =
+                $journalLinesStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+            // Group lines by journal entry ID
+            foreach ($journalLines as $line) {
+
+                $journalEntryId =
+                    $line['journal_entry_id'];
+
+                if (!isset(
+                    $journalLinesByEntry[$journalEntryId]
+                )) {
+                    $journalLinesByEntry[$journalEntryId] = [];
+                }
+
+                $journalLinesByEntry[$journalEntryId][] = $line;
+            }
+        }
     }
+
+
+    // =========================================================
+    // Attach lines to each Journal Voucher
+    // =========================================================
+
+    foreach ($journalVouchers as &$voucher) {
+
+        $voucherId = $voucher['id'];
+
+        $voucher['lines'] =
+            $journalLinesByEntry[$voucherId] ?? [];
+    }
+
+    unset($voucher);
+
+
+    // =========================================================
+    // Transactions
+    // =========================================================
+
+    $transactionStmt = $this->db->prepare("
+        SELECT * FROM (
+
+            SELECT
+                l.id AS transaction_id,
+                'LOAN_RELEASE' AS transaction_type,
+                l.disbursement_date AS transaction_date,
+                l.principal_amount AS amount,
+                l.loan_account_no AS reference_number,
+                l.loan_account_no AS account_number,
+                l.current_balance AS balance_after,
+                CONCAT(
+                    'Loan disbursement - ',
+                    COALESCE(lp.name, 'Loan')
+                ) AS description,
+                'loan' AS source,
+                l.created_at
+
+            FROM loans l
+
+            LEFT JOIN loan_products lp
+                ON lp.id = l.loan_product_id
+
+            WHERE l.member_id = :loan_member_id
+
+
+            UNION ALL
+
+
+            SELECT
+                p.id AS transaction_id,
+                'LOAN_PAYMENT' AS transaction_type,
+                p.payment_date AS transaction_date,
+                p.total_amount AS amount,
+                p.receipt_no AS reference_number,
+                l.loan_account_no AS account_number,
+                l.current_balance AS balance_after,
+                CONCAT(
+                    'Loan payment - ',
+                    l.loan_account_no
+                ) AS description,
+                'loan' AS source,
+                p.created_at
+
+            FROM loan_payments p
+
+            INNER JOIN loans l
+                ON l.id = p.loan_id
+
+            WHERE p.member_id = :payment_member_id
+
+
+            UNION ALL
+
+
+            SELECT
+                st.id AS transaction_id,
+                st.type AS transaction_type,
+                st.transaction_date,
+                st.amount,
+                st.transaction_no AS reference_number,
+                sa.account_number,
+                st.balance_after,
+                COALESCE(
+                    st.notes,
+                    CONCAT('Savings ', st.type)
+                ) AS description,
+                'savings' AS source,
+                st.created_at
+
+            FROM savings_transactions st
+
+            INNER JOIN savings_accounts sa
+                ON sa.id = st.savings_account_id
+
+            WHERE st.member_id = :savings_member_id
+
+
+            UNION ALL
+
+
+            SELECT
+                sct.id AS transaction_id,
+                sct.type AS transaction_type,
+                sct.transaction_date,
+                sct.amount,
+                sct.receipt_no AS reference_number,
+                sca.account_number,
+                NULL AS balance_after,
+                CONCAT(
+                    'Share capital ',
+                    sct.type
+                ) AS description,
+                'share_capital' AS source,
+                sct.created_at
+
+            FROM share_capital_transactions sct
+
+            INNER JOIN share_capital_accounts sca
+                ON sca.id = sct.share_account_id
+
+            WHERE sct.member_id = :share_member_id
+
+
+            UNION ALL
+
+
+            SELECT DISTINCT
+                je.id AS transaction_id,
+                je.reference_type AS transaction_type,
+                je.posting_date AS transaction_date,
+                je.total_debit AS amount,
+                je.voucher_number AS reference_number,
+                NULL AS account_number,
+                NULL AS balance_after,
+                je.description,
+                'journal' AS source,
+                je.posting_date AS created_at
+
+            FROM journal_entries je
+
+            LEFT JOIN journal_lines jl
+                ON jl.journal_entry_id = je.id
+
+            WHERE je.reference_id = :journal_reference_id
+               OR jl.subsidiary_id = :journal_subsidiary_id
+               OR je.description LIKE :journal_member_name
+
+        ) AS member_transactions
+
+        ORDER BY transaction_date DESC, created_at DESC
+    ");
+
+    $transactionStmt->execute([
+        'loan_member_id'        => $id,
+        'payment_member_id'     => $id,
+        'savings_member_id'     => $id,
+        'share_member_id'       => $id,
+        'journal_reference_id'  => $id,
+        'journal_subsidiary_id' => $id,
+        'journal_member_name'   => $memberName,
+    ]);
+
+    $transactions =
+        $transactionStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+    // =========================================================
+    // Generate Summary
+    // =========================================================
+
+    $summary = $this->generateMemberSummary(
+        $loans,
+        $savings,
+        $shareCapital,
+        $transactions,
+        $journalVouchers
+    );
+
+
+    // =========================================================
+    // Return Report
+    // =========================================================
+
+    return [
+        'member'           => $member,
+        'summary'          => $summary,
+        'loans'            => $loans,
+        'savings'          => $savings,
+        'share_capital'    => $shareCapital,
+        'journal_vouchers' => $journalVouchers,
+        'transactions'     => $transactions
+    ];
+}
     
     /**
      * Generate a financial summary for a member.

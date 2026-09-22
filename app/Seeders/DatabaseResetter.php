@@ -37,7 +37,8 @@ class DatabaseResetter
           'share_capital_accounts',
           'share_capital_settings',
           'cash_transactions',
-
+          'loans',
+          ///////////////////////////////////////
           'chart_of_accounts',
           'accounting_mappings',
           'accounting_periods',
