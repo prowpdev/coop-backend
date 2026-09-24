@@ -6,11 +6,14 @@ namespace App\Models;
 
 use App\Services\AmortizationService;
 use PDO;
+use App\Core\AuditLogger;
 
 class LoanRepository
 {
+    private AuditLogger $audit;
     public function __construct(private PDO $db)
     {
+        $this->audit = new AuditLogger($this->db);
     }
 
     /**
@@ -268,7 +271,28 @@ class LoanRepository
                 'remarks'         => $data['application_remarks']
                     ?? null
             ]);
-
+            
+            /*
+            * ============================================================
+            *  RECORD AUDIT
+            * ============================================================
+            */
+            $this->audit->recordAuditTrail(
+                'Loan Application',
+                'None',
+                [
+                    'id' => $applicationId,
+                    'application_no' => $applicationNo,
+                    'member_id' => $data['member_id'],
+                    'loan_product_id' => $data['loan_product_id'],
+                    'branch_id' => $data['branch_id'],
+                    'applied_amount' => $data['applied_amount'] ?? $principal,
+                    'term_months' => $term,
+                    'status' => $data['application_status'] ?? 'Released',
+                ],
+                $data['performed_by'] ?? $data['approved_by'] ?? 'System',
+                'Created loan application'
+            );
             /*
             * ============================================================
             * 2. INSERT LOAN RECORD
@@ -361,6 +385,27 @@ class LoanRepository
                     ?? date('Y-m-d')
             ]);
 
+            $this->audit->recordAuditTrail(
+                'Loan',
+                'None',
+                [
+                    'id' => $id,
+                    'loan_account_no' => $accountNo,
+                    'member_id' => $data['member_id'],
+                    'loan_product_id' => $data['loan_product_id'],
+                    'branch_id' => $data['branch_id'],
+                    'principal_amount' => $principal,
+                    'annual_interest_rate' => $rate,
+                    'interest_calculation_method' => $method,
+                    'term_months' => $term,
+                    'payment_frequency' => $frequency,
+                    'disbursement_date' => $startDate,
+                    'net_disbursed' => $netDisbursed,
+                    'status' => $data['status'] ?? 'Active',
+                ],
+                $data['performed_by'] ?? $data['approved_by'] ?? 'System',
+                'Created and released loan'
+            );
             /*
             * ============================================================
             * 3. GENERATE AMORTIZATION SCHEDULE
@@ -1265,7 +1310,24 @@ class LoanRepository
                 'remarks' =>
                     $data['remarks'] ?? null
             ]);
-
+            $this->audit->recordAuditTrail(
+                'Loan Application',
+                'None',
+                [
+                    'id' => $applicationId,
+                    'application_no' => $applicationNo,
+                    'member_id' => $data['member_id'],
+                    'loan_product_id' => $data['loan_product_id'],
+                    'branch_id' => $data['branch_id'],
+                    'applied_amount' => $principal,
+                    'term_months' => $term,
+                    'purpose' => $data['purpose'] ?? null,
+                    'status' => $data['status'] ?? 'Pending',
+                    'submitted_date' => $submittedDate,
+                ],
+                $data['performed_by'] ?? 'System',
+                'Created loan application'
+            );
             $this->db->commit();
             
 
@@ -1505,7 +1567,19 @@ class LoanRepository
                 'id' =>
                     $applicationId
             ]);
-
+            $this->audit->recordAuditTrail(
+            'Loan Status',
+            'Pending',
+            [
+                'application_id' => $applicationId,
+                'approved_amount' => $approvedAmount,
+                'status' => 'Approved',
+                'approved_by' => $approvedBy ?? 'System',
+                'remarks' =>  $data['remarks'] ?? $application['remarks'] ,
+            ],
+            $approvedBy ?? 'System',
+            'Approved loan application'
+        );
             $this->db->commit();
 
             return $this->findApplication(
@@ -2001,6 +2075,71 @@ class LoanRepository
                 'id' =>
                     $applicationId
             ]);
+
+            /*
+            * ============================================================
+            * 11. AUDIT — LOAN DISBURSEMENT
+            * ============================================================
+            */
+
+            $this->audit->recordAuditTrail(
+                'Loan',
+                'None',
+                [
+                    'id' => $loanId,
+                    'loan_account_no' => $accountNo,
+                    'application_id' => $applicationId,
+                    'member_id' => $application['member_id'],
+                    'loan_product_id' => $application['loan_product_id'],
+                    'branch_id' => $application['branch_id'],
+                    'principal_amount' => $principal,
+                    'annual_interest_rate' => $rate,
+                    'interest_calculation_method' => $method,
+                    'term_months' => $term,
+                    'payment_frequency' => $frequency,
+                    'disbursement_date' => $startDate,
+                    'first_due_date' => $firstDueDate,
+                    'maturity_date' => $maturityDate,
+                    'processing_fee' => $processingFee,
+                    'service_fee' => $serviceFee,
+                    'net_disbursed' => $netDisbursed,
+                    'cash_account_id' => $cashAccountId,
+                    'status' => 'Active',
+                    'current_balance' => $principal,
+                ],
+                $data['performed_by']
+                    ?? $data['approved_by']
+                    ?? 'System',
+                'Disbursed loan'
+            );
+
+            /*
+            * ============================================================
+            * 12. AUDIT — APPLICATION RELEASED
+            * ============================================================
+            */
+
+            $this->audit->recordAuditTrail(
+                'Loan Application',
+                [
+                    'id' => $application['id'],
+                    'application_no' => $application['application_no'],
+                    'status' => $application['status'],
+                    'approved_amount' => $application['approved_amount'],
+                ],
+                [
+                    'id' => $application['id'],
+                    'application_no' => $application['application_no'],
+                    'status' => 'Released',
+                    'approved_amount' => $application['approved_amount'],
+                ],
+                $data['performed_by']
+                    ?? $data['approved_by']
+                    ?? 'System',
+                'Marked loan application as released after disbursement'
+            );
+
+
 
             /*
             * ============================================================

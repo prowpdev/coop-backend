@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Models;
 
 use PDO;
+use App\Core\AuditLogger;
 
 class ShareCapitalRepository
-{
+{   
+    private AuditLogger $audit;
     public function __construct(private PDO $db)
     {
+        $this->audit = new AuditLogger($this->db);
     }
 
     /**
@@ -627,7 +630,7 @@ class ShareCapitalRepository
                     bin2hex(random_bytes(6));
 
                 $voucherNo =
-                    'JV-SC-' .
+                    'OR-SC-' .
                     date('Ymd') .
                     '-' .
                     strtoupper(
@@ -782,7 +785,7 @@ class ShareCapitalRepository
             * --------------------------------------------------------
             */
 
-            $auditId = $this->recordAuditTrail(
+            $auditId = $this->audit->recordAuditTrail(
                 'Share Capital Account Created',
                 'None',
                 [
@@ -1634,15 +1637,8 @@ class ShareCapitalRepository
         */
 
         $auditId =
-            $this->recordAuditTrail(
+            $this->audit->recordAuditTrail(
                 'Share Capital Payment',
-
-                /*
-                |--------------------------------------------------------------------------
-                | OLD VALUE
-                |--------------------------------------------------------------------------
-                */
-
                 [
                     'transaction_id' =>
                         null,
@@ -2573,9 +2569,8 @@ public function updateAccount(string $id, array $data): array
          * ---------------------------------------------------------
          */
 
-        $auditId = $this->recordAuditTrail(
+        $auditId = $this->audit->recordAuditTrail(
             'Share Capital Account Updated',
-
             [
                 'account_id' =>
                     $id,
@@ -2831,82 +2826,5 @@ public function updateAccount(string $id, array $data): array
         return $fetch->fetch(PDO::FETCH_ASSOC) ?: [];
     }
 
-    private function recordAuditTrail(
-    string $setting,
-    mixed $oldValue = 'None',
-    mixed $newValue = 'None',
-    string $changedBy = 'System',
-    string $reason = 'System event'
-): string {
-    $id = 'audit_' . bin2hex(random_bytes(8));
 
-    $now = date('c');
-
-    $stmt = $this->db->prepare("
-        INSERT INTO configuration_audit_trails (
-            id,
-            setting,
-            old_value,
-            new_value,
-            changed_by,
-            created_at,
-            reason
-        ) VALUES (
-            :id,
-            :setting,
-            :old_value,
-            :new_value,
-            :changed_by,
-            :created_at,
-            :reason
-        )
-    ");
-
-    $stmt->execute([
-        ':id' =>
-            $id,
-
-        ':setting' =>
-            $setting,
-
-        ':old_value' =>
-            $this->auditValue($oldValue),
-
-        ':new_value' =>
-            $this->auditValue($newValue),
-
-        ':changed_by' =>
-            $changedBy,
-
-        ':created_at' =>
-            $now,
-
-        ':reason' =>
-            $reason
-    ]);
-
-    return $id;
-}
-
-
-private function auditValue(mixed $value): string
-{
-    if ($value === null) {
-        return 'None';
-    }
-
-    if (is_bool($value)) {
-        return $value ? 'true' : 'false';
-    }
-
-    if (is_array($value) || is_object($value)) {
-        return json_encode(
-            $value,
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
-        ) ?: 'None';
-    }
-
-    return (string) $value;
-}
 }

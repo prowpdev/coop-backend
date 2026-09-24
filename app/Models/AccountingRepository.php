@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Models;
 
 use PDO;
+use App\Core\AuditLogger;
 
 class AccountingRepository
 {
+    private AuditLogger $audit;
     public function __construct(private PDO $db)
     {
+         $this->audit = new AuditLogger($this->db);
     }
 
     /**
@@ -39,39 +42,104 @@ class AccountingRepository
         return $res ?: null;
     }
 
-    /**
-     * Create or update account in Chart of Accounts
-     */
-    public function saveAccount(array $data): array
-    {
+ /**
+ * Create or update account in Chart of Accounts
+ */
+public function saveAccount(array $data): array
+{
+    try {
+
+        $this->db->beginTransaction();
+
         $id = $data['id'] ?? ('coa_' . bin2hex(random_bytes(6)));
 
         $sql = "
-            INSERT INTO chart_of_accounts (id, account_code, name, category, normal_balance, is_active, report_group, description)
-            VALUES (:id, :account_code, :name, :category, :normal_balance, :is_active, :report_group, :description)
+            INSERT INTO chart_of_accounts
+            (
+                id,
+                account_code,
+                name,
+                category,
+                normal_balance,
+                is_active,
+                parent_account_id,
+                report_group,
+                description,
+                created_at
+            )
+            VALUES
+            (
+                :id,
+                :account_code,
+                :name,
+                :category,
+                :normal_balance,
+                :is_active,
+                :parent_account_id,
+                :report_group,
+                :description,
+                NOW()
+            )
             ON DUPLICATE KEY UPDATE
                 name = VALUES(name),
                 category = VALUES(category),
                 normal_balance = VALUES(normal_balance),
                 is_active = VALUES(is_active),
+                parent_account_id = VALUES(parent_account_id),
                 report_group = VALUES(report_group),
                 description = VALUES(description)
         ";
 
         $stmt = $this->db->prepare($sql);
+
+        $test = $stmt->execute([
+            ':id'                => $id,
+            ':account_code'      => $data['account_code'],
+            ':name'              => $data['name'],
+            ':category'          => $data['category'],
+            ':normal_balance'    => $data['normal_balance'],
+            ':is_active'         => isset($data['is_active'])
+                ? (int) $data['is_active']
+                : 1,
+            ':parent_account_id' => $data['parent_account_id'] ?? null,
+            ':report_group'      => $data['report_group'] ?? 'General',
+            ':description'       => $data['description'] ?? null
+        ]);
+        print_r($test);
+        // Get the actual saved record BEFORE commit
+        $stmt = $this->db->prepare("
+            SELECT *
+            FROM chart_of_accounts
+            WHERE account_code = :account_code
+            LIMIT 1
+        ");
+
         $stmt->execute([
-            'id'             => $id,
-            'account_code'   => $data['account_code'],
-            'name'           => $data['name'],
-            'category'       => $data['category'],
-            'normal_balance' => $data['normal_balance'],
-            'is_active'      => isset($data['is_active']) ? (int)$data['is_active'] : 1,
-            'report_group'   => $data['report_group'] ?? 'General',
-            'description'    => $data['description'] ?? null
+            ':account_code' => $data['account_code']
         ]);
 
-        return $this->findAccount($id) ?? [];
+        $account = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        if (!$account) {
+            throw new \Exception(
+                'Account was not found after INSERT/UPDATE.'
+            );
+        }
+
+        // Commit only after successful INSERT and SELECT
+        $this->db->commit();
+
+        return $account;
+
+    } catch (\Throwable $e) {
+
+        if ($this->db->inTransaction()) {
+            $this->db->rollBack();
+        }
+
+        throw $e;
     }
+}
 
     /**
      * Fetch journal entries with lines
@@ -184,10 +252,21 @@ class AccountingRepository
 
         try {
             $id = $data['id'] ?? ('je_' . bin2hex(random_bytes(6)));
-            $voucherNo = $data['voucher_number'] ?? ('JV-' . date('Ymd') . '-' . str_pad((string)mt_rand(1, 9999), 4, '0', STR_PAD_LEFT));
+            $vType = strtoupper($data['voucher_type'] ?? 'JV');
+            if ($vType === 'OR' || $vType === 'CRJ') {
+                $prefix = 'OR';
+                $defaultRef = 'CASH_RECEIPT';
+            } elseif ($vType === 'CD' || $vType === 'CDJ') {
+                $prefix = 'CD';
+                $defaultRef = 'CASH_DISBURSEMENT';
+            } else {
+                $prefix = 'JV';
+                $defaultRef = 'Manual JV';
+            }
+            $voucherNo = $data['voucher_number'] ?? ($prefix . '-' . date('Ymd') . '-' . str_pad((string)mt_rand(1, 9999), 4, '0', STR_PAD_LEFT));
             $postingDate = $data['posting_date'] ?? date('Y-m-d');
             $branchId = $data['branch_id'] ?? 'br_main';
-            $created_by = $data['created_by'];
+            $created_by = $data['created_by'] ?? ($data['performed_by'] ?? 'System User');
 
             $sql = "
                 INSERT INTO journal_entries (
@@ -205,8 +284,8 @@ class AccountingRepository
                 'voucher_number' => $voucherNo,
                 'branch_id'      => $branchId,
                 'posting_date'   => $postingDate,
-                'reference_type' => $data['reference_type'] ?? 'Manual JV',
-                'description'    => $data['description'] ?? 'Manual Journal Voucher',
+                'reference_type' => $data['reference_type'] ?? $defaultRef,
+                'description'    => $data['description'] ?? ($prefix . ' Entry'),
                 'total_debit'    => $totalDebit,
                 'total_credit'   => $totalCredit,
                 'period_id'      => $data['period_id'] ?? ('period_' . date('Y_m')),

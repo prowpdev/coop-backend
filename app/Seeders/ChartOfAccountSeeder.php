@@ -18,12 +18,13 @@ class ChartOfAccountSeeder
             ['acc_1110', '1110', 'Cash on Hand - Tellers', 'Asset', 'Debit', 1, null, 'Current Assets', 'Petty cash and daily cashier vault drawers'],
             ['acc_1120', '1120', 'Cash in Bank - Land Bank of the Philippines', 'Asset', 'Debit', 1, null, 'Current Assets', 'LBP primary operating clearing depository'],
             ['acc_1121', '1121', 'Cash in Bank - Development Bank of the Philippines', 'Asset', 'Debit', 1, null, 'Current Assets', 'DBP high-yield special reserve depository'],
-
+            
             ['acc_1210', '1210', 'Loans Receivable - Regular Multi-Purpose', 'Asset', 'Debit', 1, null, 'Loans and Receivables', 'Principal balance of outstanding member multi-purpose loans'],
             ['acc_1220', '1220', 'Loans Receivable - Emergency Micro-Loans', 'Asset', 'Debit', 1, null, 'Loans and Receivables', 'Emergency calamity and express medical credit lines'],
             ['acc_1230', '1230', 'Loans Receivable - Agricultural Crop Financing', 'Asset', 'Debit', 1, null, 'Loans and Receivables', 'Seasonal crop inputs, fertilizer, and agricultural financing'],
             ['acc_1290', '1290', 'Allowance for Probable Loan Losses', 'Asset', 'Credit', 1, null, 'Contra-Asset', 'Provision for PAR and non-performing loan impairments'],
             ['acc_1310', '1310', 'Interest Receivable on Loans', 'Asset', 'Debit', 1, null, 'Receivables', 'Accrued but uncollected loan installment interest'],
+            ['acc_1400', '1200', 'Farm Machinery', 'Asset', 'Debit', 1, null, 'Property, Plant & Equipment', 'Farm machinery and equipment owned by the cooperative'],
 
             ['acc_1510', '1510', 'Office & IT Equipment', 'Asset', 'Debit', 1, null, 'Property, Plant & Equipment', 'Servers, teller terminals, and office workstations'],
             ['acc_1590', '1590', 'Accumulated Depreciation - Office Equipment', 'Asset', 'Credit', 1, null, 'Contra-Asset', 'Depreciation reserve on operational equipment'],
